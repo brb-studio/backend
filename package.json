@@ -1,0 +1,30 @@
+{
+  "name": "magicstudio-backend",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "dev": "bun --watch src/main.ts",
+    "start": "bun src/main.ts",
+    "lint": "biome ci .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./src",
+    "test:int": "bun test --preload ./tests/env.ts --preload ./tests/preload.ts ./tests",
+    "audit": "bun audit --audit-level=high",
+    "tenant:create": "bun scripts/tenant-create.ts",
+    "seed": "bun scripts/seed.ts",
+    "vapid:keys": "bun scripts/vapid-keys.ts"
+  },
+  "trustedDependencies": [],
+  "dependencies": {
+    "hono": "4.13.9",
+    "mongodb": "7.7.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2"
+  }
+}

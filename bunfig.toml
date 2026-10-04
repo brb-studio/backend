@@ -1,0 +1,9 @@
+[install]
+# Write exact versions to package.json, never ^ranges.
+exact = true
+# Refuse versions published less than 3 days ago (hijacked releases are usually caught within hours).
+# Emergency security patch: one-off `bun add -E pkg@x.y.z --minimum-release-age=0`, never loosen this.
+minimumReleaseAge = 259200
+# Never install packages on import.
+auto = "disable"
+saveTextLockfile = true

@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "formatter": { "indentStyle": "space" },
+  "overrides": [
+    {
+      "includes": ["src/features/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/db/client", "**/db/collections"],
+                    "message": "Features reach the database through db/scoped: forTenant() adds tenantId to every query."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
