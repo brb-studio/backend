@@ -17,6 +17,7 @@ export {
   APPOINTMENT_STATUSES,
   LOCALES,
   PLANS,
+  REFERRAL_STATUSES,
   ROLES,
   STATUSES,
   TIME_OFF_KINDS,
@@ -81,6 +82,7 @@ export type TenantDb = ReturnType<typeof forTenant>;
 
 export const platform = {
   tenants: raw.tenants,
+  referrals: raw.referrals,
   sessions: raw.sessions,
   pushSubscriptions: raw.pushSubscriptions,
   images: raw.images,

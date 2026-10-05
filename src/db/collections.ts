@@ -40,8 +40,38 @@ export type TenantDoc = {
     chargesEnabled: boolean;
     onboardedAt?: Date;
   };
+  /**
+   * The barbershop paying us (Stripe Billing on the platform account), unlike `stripe`, which is the
+   * Connect account its customers pay. `firstPaidAt` marks the first paid month (referral codes need it).
+   */
+  billing?: {
+    stripeCustomerId?: string;
+    stripeSubscriptionId?: string;
+    firstPaidAt?: Date;
+  };
+  /** The code this tenant shares with other barbershops. */
+  referralCode?: string;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export const REFERRAL_STATUSES = ["pending", "rewarded", "skipped"] as const;
+
+/** One barbershop bringing another; at most one per referee, ever. */
+export type ReferralDoc = {
+  _id: ObjectId;
+  referrerTenantId: ObjectId;
+  refereeTenantId: ObjectId;
+  code: string;
+  discountPercent: number;
+  status: (typeof REFERRAL_STATUSES)[number];
+  checkoutSessionId: string;
+  currency: string;
+  subtotalMinor: number;
+  rewardMinor: number;
+  stripeBalanceTransactionId?: string;
+  createdAt: Date;
+  rewardedAt?: Date;
 };
 
 export type Hours = { weekday: number; open: string; close: string };
@@ -174,6 +204,7 @@ export type TimeOffDoc = {
 };
 
 export const tenants = db.collection<TenantDoc>("tenants");
+export const referrals = db.collection<ReferralDoc>("referrals");
 export const branches = db.collection<BranchDoc>("branches");
 export const users = db.collection<UserDoc>("users");
 export const sessions = db.collection<SessionDoc>("sessions");
@@ -368,6 +399,7 @@ const object = (required: string[], properties: Document) => ({
   properties,
 });
 const HHMM = "^([01]\\d|2[0-3]):[0-5]\\d$";
+const REFERRAL_CODE = "^[A-HJ-NP-Z2-9]{8}$";
 const timestamps = { createdAt: date, updatedAt: date };
 const localized = { bsonType: "object" };
 const hours = {
@@ -424,6 +456,15 @@ export const specs: CollectionSpec[] = [
             chargesEnabled: bool,
             onboardedAt: date,
           }),
+          billing: {
+            bsonType: "object",
+            properties: {
+              stripeCustomerId: string({ pattern: "^cus_\\w+$" }),
+              stripeSubscriptionId: string({ pattern: "^sub_\\w+$" }),
+              firstPaidAt: date,
+            },
+          },
+          referralCode: string({ pattern: REFERRAL_CODE }),
           ...timestamps,
         },
       ),
@@ -441,6 +482,20 @@ export const specs: CollectionSpec[] = [
         name: "stripe_account_unique",
         unique: true,
         partialFilterExpression: { "stripe.accountId": { $type: "string" } },
+      },
+      {
+        key: { referralCode: 1 },
+        name: "referralCode_unique",
+        unique: true,
+        partialFilterExpression: { referralCode: { $type: "string" } },
+      },
+      {
+        key: { "billing.stripeCustomerId": 1 },
+        name: "stripeCustomer_unique",
+        unique: true,
+        partialFilterExpression: {
+          "billing.stripeCustomerId": { $type: "string" },
+        },
       },
     ],
   },
@@ -976,6 +1031,44 @@ export const specs: CollectionSpec[] = [
     indexes: [
       { key: { endpoint: 1 }, name: "endpoint_unique", unique: true },
       { key: { tenantId: 1, userId: 1 }, name: "tenant_user" },
+    ],
+  },
+  {
+    name: "referrals",
+    validator: {
+      $jsonSchema: object(
+        [
+          "referrerTenantId",
+          "refereeTenantId",
+          "code",
+          "discountPercent",
+          "status",
+          "checkoutSessionId",
+          "currency",
+          "subtotalMinor",
+          "rewardMinor",
+          "createdAt",
+        ],
+        {
+          referrerTenantId: objectId,
+          refereeTenantId: objectId,
+          code: string({ pattern: REFERRAL_CODE }),
+          discountPercent: int(1, 100),
+          status: oneOf(REFERRAL_STATUSES),
+          checkoutSessionId: string({ pattern: "^cs_\\w+$" }),
+          currency: string({ pattern: "^[a-z]{3}$" }),
+          subtotalMinor: int(0, 100_000_000),
+          rewardMinor: int(0, 100_000_000),
+          stripeBalanceTransactionId: string(),
+          createdAt: date,
+          rewardedAt: date,
+        },
+      ),
+      $expr: { $ne: ["$referrerTenantId", "$refereeTenantId"] },
+    },
+    indexes: [
+      { key: { refereeTenantId: 1 }, name: "referee_unique", unique: true },
+      { key: { referrerTenantId: 1 }, name: "referrer" },
     ],
   },
 ];

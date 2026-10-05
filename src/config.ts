@@ -41,6 +41,11 @@ const schema = z
       .optional(),
     FRONTEND_URL: z.url().optional(),
     STRIPE_APP_FEE_BPS: z.coerce.number().int().min(0).max(10000).default(0),
+    /** The one monthly price barbershops pay for the app. */
+    STRIPE_SUBSCRIPTION_PRICE: z
+      .string()
+      .regex(/^price_\w+$/, "must be a Stripe price id")
+      .optional(),
     VAPID_PUBLIC_KEY: z
       .string()
       .regex(/^[\w-]{87}$/)
@@ -73,6 +78,13 @@ const schema = z
     {
       path: ["STRIPE_SECRET_KEY"],
       error: "set both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, or neither",
+    },
+  )
+  .refine(
+    (env) => !env.STRIPE_SUBSCRIPTION_PRICE || Boolean(env.STRIPE_SECRET_KEY),
+    {
+      path: ["STRIPE_SUBSCRIPTION_PRICE"],
+      error: "needs STRIPE_SECRET_KEY",
     },
   )
   .refine((env) => env.NODE_ENV !== "test" || env.MONGO_DB.endsWith("_test"), {

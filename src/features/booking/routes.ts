@@ -9,6 +9,7 @@ import {
 } from "../../shared/http";
 import { STAFF } from "../auth/policy";
 import { authOf, requireRole } from "../auth/routes";
+import { paymentToken } from "../payments/stripe";
 import { requireActiveSubscription } from "../tenancy/subscription";
 import {
   appointmentRange,
@@ -36,7 +37,12 @@ export const publicBookingRoutes = new Hono<Env>()
   .post("/appointments", requireActiveSubscription, async (c) => {
     const input = await readJson(c, publicBooking);
     const ip = clientIp(c, config.PROXY_SECRET);
-    return c.json(await bookOnline(c.var.tenant, c.var.auth, input, ip), 201);
+    const appointment = await bookOnline(c.var.tenant, c.var.auth, input, ip);
+    const token = paymentToken(parseId(appointment.id));
+    return c.json(
+      { ...appointment, ...(token && { paymentToken: token }) },
+      201,
+    );
   })
   .post("/quote", async (c) => {
     const input = await readJson(c, publicQuote);

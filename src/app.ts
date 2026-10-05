@@ -12,6 +12,7 @@ import {
   publicBarberRoutes,
   timeOffRoutes,
 } from "./features/barbers/routes";
+import { billingRoutes } from "./features/billing/routes";
 import {
   appointmentRoutes,
   meRoutes,
@@ -84,6 +85,7 @@ export const app = new Hono<Env>()
   .route("/v1/payments", stripeStaffRoutes)
   .route("/v1/me", meRoutes)
   .route("/v1/tenant", tenantRoutes)
+  .route("/v1/billing", billingRoutes)
   .route("/v1/branches", branchRoutes)
   .route("/v1/users", userRoutes)
   .route("/v1/barbers", barberRoutes)

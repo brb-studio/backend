@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type Stripe from "stripe";
 import { config } from "../../config";
 import { hit } from "../../db/rate-limit";
 import {
@@ -10,6 +11,7 @@ import {
 } from "../../shared/http";
 import { STAFF } from "../auth/policy";
 import { requireRole } from "../auth/routes";
+import { handleBillingEvent } from "../billing/service";
 import { requireActiveSubscription } from "../tenancy/subscription";
 import { paymentIntentBody } from "./schemas";
 import {
@@ -20,7 +22,7 @@ import {
   handleThinNotification,
   refundAppointment,
 } from "./service";
-import { paymentsEnabled, requireStripe } from "./stripe";
+import { paymentsEnabled, requireStripe, validPaymentToken } from "./stripe";
 
 export const stripeConnectRoutes = new Hono<Env>()
   .use(requireRole(...STAFF))
@@ -58,8 +60,15 @@ export const stripePublicRoutes = new Hono<Env>().post(
     if (!(await hit(`pay:${c.var.tenant._id}:${ip}`, 30, 10 * 60 * 1000))) {
       throw new AppError(429, "RATE_LIMITED", "Too many attempts");
     }
-    const { appointmentId } = await readJson(c, paymentIntentBody);
+    const { appointmentId, paymentToken } = await readJson(
+      c,
+      paymentIntentBody,
+    );
     const auth = c.var.auth;
+    // Guests prove they booked it with the token from the booking response; an id alone is guessable.
+    if (!auth && !validPaymentToken(appointmentId, paymentToken)) {
+      throw new AppError(404, "NOT_FOUND", "Not found");
+    }
     if (auth && auth.role === "customer") {
       const { findCustomer } = await import("../booking/customers");
       const { forTenant } = await import("../../db/scoped");
@@ -90,16 +99,21 @@ export const stripeWebhookRoutes = new Hono<Env>().post("/", async (c) => {
   }
   const payload = await c.req.text();
   const stripe = requireStripe();
+  let event: Stripe.Event | undefined;
   try {
-    const event = await stripe.webhooks.constructEventAsync(
+    event = await stripe.webhooks.constructEventAsync(
       payload,
       signature,
       config.STRIPE_WEBHOOK_SECRET,
     );
-    await handleStripeEvent(event);
-    return c.json({ received: true });
   } catch {
     // Not a v1 event: connected accounts speak thin events (v2).
+  }
+  if (event) {
+    // Outside the try: a failing handler answers 500 (Stripe retries), not "bad signature".
+    await handleStripeEvent(event);
+    await handleBillingEvent(event);
+    return c.json({ received: true });
   }
   try {
     const notification = await stripe.parseEventNotificationAsync(

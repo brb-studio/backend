@@ -68,6 +68,10 @@ Every `/v1` request needs the tenant's host in `X-Forwarded-Host` (the frontend 
 | `GET /v1/notifications/stream` | staff | Server-Sent Events: `ready`, `notification`, `ping` every 15 s |
 | `POST /v1/images` | owner/admin/manager | Raw bytes (JPEG, PNG or WebP, ≤ 1 MB; the type is read from the bytes, SVG refused) → `{ id }`. 500 per tenant, 60 per user per hour. Store `/api/images/<id>` (the frontend's path) in an `image` field |
 | `GET /images/:id` | anyone | Outside `/v1` (no tenant): the photo, `Cache-Control: immutable`. Ids are 128-bit random |
+| `GET /v1/billing` | owner | `price` (read from Stripe; `null` when subscriptions are off), plan, status, `creditMinor` (Stripe balance in favor), `referral: { code, friendPercent, rewardPercent, referred, rewarded, earnedMinor }`. `code` is `null` until the first paid month |
+| `POST /v1/billing/referral-check` | owner | `{ code }` → `{ code, discountPercent }`. 404 `REFERRAL_NOT_FOUND`, 409 `REFERRAL_SELF` (own tenant or same owner email), 409 `REFERRAL_NOT_FIRST`; 20 per tenant per hour |
+| `POST /v1/billing/checkout` | owner | `{ referralCode?, returnUrl }` → `{ url }` of Stripe Checkout for the one monthly price (`STRIPE_SUBSCRIPTION_PRICE`); paying sets plan `pro`. `returnUrl` must be the tenant's own site. 409 `ALREADY_SUBSCRIBED`, `LIFETIME_PLAN` |
+| `POST /v1/billing/portal` | owner | `{ returnUrl }` → `{ url }` of Stripe's customer portal (card, invoices, cancel). 409 `NO_BILLING_ACCOUNT` |
 | `GET /v1/notifications/push-key` · `POST` · `DELETE /v1/notifications/push-subscriptions` | staff | VAPID public key (404 `PUSH_DISABLED` without keys) and the browser's push subscription |
 
 Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or ended more than 7 days ago. Sessions last 30 days and renew once past half their life.
@@ -92,6 +96,8 @@ Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or e
 - **Rate limits:** fixed windows in the `rateLimits` collection: one atomic upsert per attempt, so every API instance shares the count (30 concurrent attempts against a limit of 20 let exactly 20 through). Keys are SHA-256 hashed (no emails or phones stored); a TTL index drops old windows.
 - **Visitor IP:** only the frontend's server may state it: it sends `X-Forwarded-For` plus `X-Proxy-Secret` (`PROXY_SECRET`, required in production). Without the secret the API uses the socket address, so a forged header can't dodge a limit. The frontend picks the IP its own proxies wrote (`TRUSTED_PROXY_HOPS`).
 - **Performance:** the availability engine converts timezones once per window instead of per slot (30 barbers × 31 days in ~6 ms), so it stays on the main thread; no workers needed.
+- **Subscriptions:** Stripe Billing on the platform account (the barbershop pays us), apart from Connect (`features/payments`, its customers pay the barbershop). Both arrive at `/webhooks/stripe`; billing ignores events carrying `account`. Webhooks re-read the subscription from the API (events arrive out of order) and copy plan, status, period end and limits onto the tenant, so `requireActiveSubscription` works unchanged. Billing routes skip that middleware: an expired barbershop must be able to pay.
+- **Referrals:** a barbershop that has paid once gets an 8-symbol code (no I/O/0/1). Another barbershop using it on its first paid month gets 20% off that month (Stripe coupon, `duration: once`). Once that payment succeeds, the referrer gets 10% of the friend's list price as Stripe customer balance, which Stripe spends on the next invoices by itself and which stacks (10 friends = a free month; leftovers carry over). One referral per referee ever (unique index) and the credit carries an idempotency key, so a retried webhook can't pay twice. Rules in `billing/rules.ts`.
 - **Business model:** one codebase. Subscription tenants plus one tenant on a `lifetime` plan. No per-customer forks.
 
 ## Layout
@@ -112,6 +118,7 @@ src/
     booking/    appointments, customers, snapshots (order.ts), cancel, reschedule
     promotions/ rules.ts (pure) + pricing and redemptions
     notifications/ in-app notifications, SSE stream, Web Push subscriptions
+    billing/    subscription checkout, portal, webhook sync; referral codes and rewards (rules.ts is pure)
   shared/       errors, validation, time (local ↔ instant with Temporal), web-push
 scripts/        tenant-create.ts, seed.ts, vapid-keys.ts
 tests/          integration tests (real MongoDB)
