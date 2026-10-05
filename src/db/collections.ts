@@ -34,6 +34,12 @@ export type TenantDoc = {
     currentPeriodEnd?: Date;
     limits: { branches: number; barbers: number };
   };
+  stripe?: {
+    accountId: string;
+    detailsSubmitted: boolean;
+    chargesEnabled: boolean;
+    onboardedAt?: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 };
@@ -57,7 +63,6 @@ export type BranchDoc = {
   phone?: string;
   mapsUrl?: string;
   image?: string;
-  /** Photos, cover first (`image` is the single photo of older documents). */
   images?: string[];
   timeZone: string;
   hours: Hours[];
@@ -231,6 +236,12 @@ export type PromotionSnapshot = {
   amountMinor: number;
 };
 
+export type AppointmentPaymentStatus =
+  | "requires_payment"
+  | "paid"
+  | "refunded"
+  | "failed";
+
 export type AppointmentDoc = {
   _id: ObjectId;
   tenantId: ObjectId;
@@ -248,6 +259,14 @@ export type AppointmentDoc = {
   discountMinor: number;
   totalMinor: number;
   promotion?: PromotionSnapshot;
+  payment?: {
+    provider: "stripe";
+    intentId: string;
+    status: AppointmentPaymentStatus;
+    amountMinor: number;
+    applicationFeeMinor?: number;
+    paidAt?: Date;
+  };
   notes?: string;
   source: "online" | "staff";
   createdBy?: ObjectId;
@@ -399,6 +418,12 @@ export const specs: CollectionSpec[] = [
               barbers: int(0, 10_000),
             }),
           }),
+          stripe: object(["accountId", "detailsSubmitted", "chargesEnabled"], {
+            accountId: string({ pattern: "^acct_" }),
+            detailsSubmitted: bool,
+            chargesEnabled: bool,
+            onboardedAt: date,
+          }),
           ...timestamps,
         },
       ),
@@ -410,6 +435,12 @@ export const specs: CollectionSpec[] = [
         name: "customDomain_unique",
         unique: true,
         partialFilterExpression: { customDomain: { $type: "string" } },
+      },
+      {
+        key: { "stripe.accountId": 1 },
+        name: "stripe_account_unique",
+        unique: true,
+        partialFilterExpression: { "stripe.accountId": { $type: "string" } },
       },
     ],
   },
@@ -780,6 +811,14 @@ export const specs: CollectionSpec[] = [
               amountMinor: int(0, 100_000_000),
             },
           ),
+          payment: object(["provider", "intentId", "status", "amountMinor"], {
+            provider: oneOf(["stripe"]),
+            intentId: string({ pattern: "^pi_" }),
+            status: oneOf(["requires_payment", "paid", "refunded", "failed"]),
+            amountMinor: int(1, 100_000_000),
+            applicationFeeMinor: int(0, 100_000_000),
+            paidAt: date,
+          }),
           source: oneOf(["online", "staff"]),
           ...timestamps,
         },
@@ -812,6 +851,11 @@ export const specs: CollectionSpec[] = [
       {
         key: { tenantId: 1, customerId: 1, startAt: -1 },
         name: "tenant_customer_start",
+      },
+      {
+        key: { "payment.intentId": 1 },
+        name: "payment_intent",
+        sparse: true,
       },
     ],
   },

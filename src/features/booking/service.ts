@@ -13,10 +13,11 @@ import {
   transaction,
 } from "../../db/scoped";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
+import { photos } from "../../shared/photos";
 import { instantToLocal } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
 import { getUser } from "../auth/service";
-import { isBookable, localDate } from "../availability/engine";
+import { freeSlots, isBookable, localDate } from "../availability/engine";
 import {
   bookableDates,
   engineInput,
@@ -28,6 +29,7 @@ import { ownBarberId } from "../barbers/service";
 import { canServe, type Request } from "../catalog/rules";
 import { resolveRequest } from "../catalog/service";
 import { deliverPush, notifyBarber } from "../notifications/service";
+import { paymentsEnabled, requireStripe } from "../payments/stripe";
 import { priceFor, redeem, release } from "../promotions/service";
 import { getBranch } from "../tenancy/service";
 import { customerForGuest, customerForUser, findCustomer } from "./customers";
@@ -418,6 +420,33 @@ async function cancel(
     ];
   });
   pushAfterCommit(tenant, notes);
+  await refundIfPaid(tenant, appointment);
+}
+
+async function refundIfPaid(tenant: TenantDoc, appointment: AppointmentDoc) {
+  if (appointment.payment?.status !== "paid") return;
+  const accountId = tenant.stripe?.accountId;
+  if (!accountId || !paymentsEnabled()) return;
+  try {
+    await requireStripe().refunds.create(
+      { payment_intent: appointment.payment.intentId },
+      { stripeAccount: accountId },
+    );
+    await forTenant(tenant._id).appointments.updateOne(
+      { _id: appointment._id, "payment.status": "paid" },
+      { $set: { "payment.status": "refunded", updatedAt: new Date() } },
+    );
+  } catch (err: unknown) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "refund_failed",
+        tenant: tenant.slug,
+        appointment: appointment._id.toHexString(),
+        message: String(err),
+      }),
+    );
+  }
 }
 
 export async function listMine(tenant: TenantDoc, auth: Auth) {
@@ -454,6 +483,134 @@ export async function cancelMine(tenant: TenantDoc, auth: Auth, id: ObjectId) {
     );
   }
   await cancel(tenant, appointment, auth.userId, undefined);
+}
+
+async function ownAppointment(tenant: TenantDoc, auth: Auth, id: ObjectId) {
+  const t = forTenant(tenant._id);
+  const customer = await findCustomer(t, { userId: auth.userId });
+  const appointment =
+    customer &&
+    (await t.appointments.findOne({ _id: id, customerId: customer._id }));
+  if (!appointment) throw notFound();
+  if (appointment.status !== "confirmed") throw notConfirmed();
+  return appointment;
+}
+
+function tooLate() {
+  return new AppError(
+    409,
+    "TOO_LATE",
+    "Too close to the appointment to change online",
+  );
+}
+
+export async function rescheduleSlots(
+  tenant: TenantDoc,
+  auth: Auth,
+  id: ObjectId,
+  range: { from?: string; days?: number },
+  now = Date.now(),
+) {
+  const t = forTenant(tenant._id);
+  const appointment = await ownAppointment(tenant, auth, id);
+  const [branch, barber] = await Promise.all([
+    t.branches.findOne({ _id: appointment.branchId, active: true }),
+    t.barbers.findOne({ _id: appointment.barberId, active: true }),
+  ]);
+  if (!branch || !barber) throw notFound();
+  const needs = bookedServiceIds(appointment.items);
+  if (
+    !needs.every((serviceId) =>
+      barber.serviceIds.some((offered) => offered.equals(serviceId)),
+    )
+  ) {
+    throw new AppError(
+      409,
+      "BARBER_UNAVAILABLE",
+      "This barber can't take this booking",
+    );
+  }
+  const minutes = bookedMinutes(appointment.items);
+  const { today, dates } = bookableDates(
+    branch.timeZone,
+    now,
+    branch.booking.windowDays,
+    range,
+  );
+  const span = spanOf(dates, branch.timeZone);
+  const schedule = span
+    ? await scheduleOf(t, branch, [barber._id], span, {
+        except: appointment._id,
+      })
+    : () => ({ blocks: [], busy: [] });
+  const input = engineInput(
+    branch,
+    barber,
+    minutes,
+    now + branch.booking.minNoticeMin * 60_000,
+    schedule(barber._id),
+  );
+  return {
+    branch: {
+      slug: branch.slug,
+      name: branch.name,
+      timeZone: branch.timeZone,
+    },
+    today,
+    dates,
+    durationMin: minutes,
+    barbers: [
+      {
+        slug: barber.slug,
+        name: barber.name,
+        ...(photos(barber).image && { image: photos(barber).image }),
+        days: freeSlots(input, dates).map((day) => ({
+          date: day.date,
+          slots: day.slots.map((slot) => ({
+            startAt: slot.startAt.toISOString(),
+            time: slot.time,
+          })),
+        })),
+      },
+    ],
+  };
+}
+
+export async function rescheduleMine(
+  tenant: TenantDoc,
+  auth: Auth,
+  id: ObjectId,
+  startAt: Date,
+) {
+  const t = forTenant(tenant._id);
+  const appointment = await ownAppointment(tenant, auth, id);
+  const branch = await t.branches.findOne({
+    _id: appointment.branchId,
+    active: true,
+  });
+  if (!branch) throw notFound();
+  const now = Date.now();
+  const notice = branch.booking.cancelNoticeMin * 60_000;
+  if (now > appointment.startAt.getTime() - notice) throw tooLate();
+  if (!insideWindow(branch, startAt, now, branch.booking.windowDays)) {
+    throw slotTaken();
+  }
+  if (startAt.getTime() < now + branch.booking.minNoticeMin * 60_000) {
+    throw slotTaken();
+  }
+  await reschedule(tenant, auth, appointment, { startAt });
+  const moved =
+    (await t.appointments.findOne({ _id: appointment._id })) ?? appointment;
+  const [freshBranch, barber] = await Promise.all([
+    t.branches.findOne({ _id: moved.branchId }),
+    t.barbers.findOne({ _id: moved.barberId }),
+  ]);
+  return customerView(
+    moved,
+    freshBranch ?? undefined,
+    barber ?? undefined,
+    now,
+  );
 }
 
 async function visibleTo(auth: Auth): Promise<Filter<AppointmentDoc>[]> {
@@ -702,6 +859,12 @@ function baseView(
     subtotalMinor: a.subtotalMinor,
     discountMinor: a.discountMinor,
     totalMinor: a.totalMinor,
+    payment: a.payment
+      ? {
+          status: a.payment.status,
+          amountMinor: a.payment.amountMinor,
+        }
+      : null,
     ...(a.promotion && {
       promotion: {
         code: a.promotion.code,

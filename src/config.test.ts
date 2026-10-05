@@ -20,6 +20,7 @@ describe("parseConfig", () => {
       MONGO_URL: local.MONGO_URL,
       MONGO_DB: "magicstudio",
       PLATFORM_DOMAIN: "localhost",
+      STRIPE_APP_FEE_BPS: 0,
     });
   });
 

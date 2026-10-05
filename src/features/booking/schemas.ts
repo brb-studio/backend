@@ -97,3 +97,10 @@ export const appointmentRange = z
       (r.from < r.to && r.to.getTime() - r.from.getTime() <= 62 * 864e5),
     { error: "to must be after from, at most 62 days apart" },
   );
+
+export const rescheduleMineBody = z.strictObject({ startAt: instant });
+
+export const rescheduleSlotsQuery = z.object({
+  from: z.iso.date().optional(),
+  days: z.coerce.number().int().min(1).max(31).optional(),
+});

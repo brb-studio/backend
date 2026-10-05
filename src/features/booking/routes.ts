@@ -15,6 +15,8 @@ import {
   appointmentUpdate,
   publicBooking,
   publicQuote,
+  rescheduleMineBody,
+  rescheduleSlotsQuery,
   staffBooking,
 } from "./schemas";
 import {
@@ -25,6 +27,8 @@ import {
   listAppointments,
   listMine,
   quote,
+  rescheduleMine,
+  rescheduleSlots,
   updateAppointment,
 } from "./service";
 
@@ -48,6 +52,28 @@ export const meRoutes = new Hono<Env>()
   .post("/appointments/:id/cancel", async (c) => {
     await cancelMine(c.var.tenant, authOf(c), parseId(c.req.param("id")));
     return c.body(null, 204);
+  })
+  .get("/appointments/:id/slots", async (c) => {
+    const range = parse(rescheduleSlotsQuery, c.req.query());
+    return c.json(
+      await rescheduleSlots(
+        c.var.tenant,
+        authOf(c),
+        parseId(c.req.param("id")),
+        range,
+      ),
+    );
+  })
+  .post("/appointments/:id/reschedule", async (c) => {
+    const { startAt } = await readJson(c, rescheduleMineBody);
+    return c.json(
+      await rescheduleMine(
+        c.var.tenant,
+        authOf(c),
+        parseId(c.req.param("id")),
+        startAt,
+      ),
+    );
   });
 
 export const appointmentRoutes = new Hono<Env>()

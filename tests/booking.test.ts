@@ -397,3 +397,148 @@ test("a guest's password-less booking and a login still work together", async ()
   });
   expect(login.status).toBe(200);
 });
+
+describe("customer reschedule", () => {
+  const bookMine = async (shop: Shop, token: string, startAt: string) => {
+    const res = await book(
+      shop,
+      { ...guestBooking(startAt), customer: undefined },
+      token,
+    );
+    expect(res.status).toBe(201);
+    return String(res.body.id);
+  };
+
+  test("slots show the barber's free times; you move to a free one", async () => {
+    const shop = await bookingShop();
+    const user = await createUser(shop.tenant, "customer", {
+      phone: nextPhone(),
+    });
+    const from = at(shop, 2, "10:00");
+    const id = await bookMine(shop, user.token, from);
+    // Someone else holds 14:00, so it must not be offered.
+    await book(shop, guestBooking(at(shop, 2, "14:00")));
+    const who = { host: shop.host, token: user.token };
+
+    const slots = await api("GET", `/v1/me/appointments/${id}/slots`, who);
+    expect(slots.status).toBe(200);
+    const body = slots.body as {
+      branch: { slug: string };
+      durationMin: number;
+      barbers: {
+        slug: string;
+        days: { date: string; slots: { startAt: string }[] }[];
+      }[];
+    };
+    expect(body.branch.slug).toBe("centro");
+    expect(body.durationMin).toBe(45);
+    expect(body.barbers).toHaveLength(1);
+    expect(body.barbers[0]?.slug).toBe("mateo");
+    const starts = body.barbers[0]?.days.flatMap((d) =>
+      d.slots.map((s) => s.startAt),
+    );
+    // Your own 10:00 doesn't block you; the stranger's 14:00 is excluded.
+    expect(starts).toContain(new Date(from).toISOString());
+    expect(starts).not.toContain(new Date(at(shop, 2, "14:00")).toISOString());
+    expect(starts?.length).toBeGreaterThan(0);
+
+    const other = await createUser(shop.tenant, "customer");
+    expect(
+      (
+        await api("GET", `/v1/me/appointments/${id}/slots`, {
+          host: shop.host,
+          token: other.token,
+        })
+      ).status,
+    ).toBe(404);
+
+    const moved = await api("POST", `/v1/me/appointments/${id}/reschedule`, {
+      ...who,
+      body: { startAt: at(shop, 2, "15:00") },
+    });
+    expect(moved.status).toBe(200);
+    expect(moved.body).toMatchObject({
+      id,
+      status: "confirmed",
+      startAt: new Date(at(shop, 2, "15:00")).toISOString(),
+      totalMinor: 30_000,
+      barber: { slug: "mateo" },
+    });
+
+    // The old time is free again for anyone else.
+    expect((await book(shop, guestBooking(at(shop, 2, "10:00")))).status).toBe(
+      201,
+    );
+  });
+
+  test("moving to a taken slot fails; inside the notice window it is too late", async () => {
+    const shop = await bookingShop();
+    const user = await createUser(shop.tenant, "customer", {
+      phone: nextPhone(),
+    });
+    const id = await bookMine(shop, user.token, at(shop, 2, "10:00"));
+    await book(shop, guestBooking(at(shop, 2, "14:00")));
+    const who = { host: shop.host, token: user.token };
+
+    const taken = await api("POST", `/v1/me/appointments/${id}/reschedule`, {
+      ...who,
+      body: { startAt: at(shop, 2, "14:00") },
+    });
+    expect(taken.status).toBe(409);
+    expect(taken.body.error?.code).toBe("SLOT_TAKEN");
+
+    await api("PATCH", `/v1/branches/${shop.branchId}`, {
+      ...shop.asOwner,
+      body: { booking: { cancelNoticeMin: 10_080 } },
+    });
+    const late = await api("POST", `/v1/me/appointments/${id}/reschedule`, {
+      ...who,
+      body: { startAt: at(shop, 2, "15:00") },
+    });
+    expect(late.status).toBe(409);
+    expect(late.body.error?.code).toBe("TOO_LATE");
+  });
+
+  test("a paid visit keeps its payment when moved; without Stripe, cancelling keeps it paid", async () => {
+    const shop = await bookingShop();
+    const user = await createUser(shop.tenant, "customer", {
+      phone: nextPhone(),
+    });
+    const id = await bookMine(shop, user.token, at(shop, 2, "10:00"));
+    await appointments.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          payment: {
+            provider: "stripe",
+            intentId: "pi_test123",
+            status: "paid",
+            amountMinor: 30_000,
+          },
+        },
+      },
+    );
+    const who = { host: shop.host, token: user.token };
+
+    const moved = await api("POST", `/v1/me/appointments/${id}/reschedule`, {
+      ...who,
+      body: { startAt: at(shop, 2, "14:00") },
+    });
+    expect(moved.status).toBe(200);
+    expect(moved.body).toMatchObject({
+      payment: { status: "paid", amountMinor: 30_000 },
+    });
+
+    expect(
+      (await api("POST", `/v1/me/appointments/${id}/cancel`, who)).status,
+    ).toBe(204);
+    expect(
+      (
+        await appointments.findOne(
+          { _id: new ObjectId(id) },
+          { projection: { payment: 1 } },
+        )
+      )?.payment,
+    ).toMatchObject({ status: "paid" });
+  });
+});
