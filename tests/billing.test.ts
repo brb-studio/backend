@@ -154,6 +154,11 @@ function fakeStripe() {
       const sub = state.subscriptions.get(id);
       if (sub) sub.status = status;
     },
+    /** What the customer portal does on "Cancel": active until `at` (seconds), or `null` to undo. */
+    setCancelAt(id: string, at: number | null) {
+      const sub = state.subscriptions.get(id);
+      if (sub) sub.cancel_at = at;
+    },
   };
 }
 
@@ -195,6 +200,7 @@ type Summary = {
   plan: string;
   status: string;
   subscribed: boolean;
+  cancelAt?: string;
   creditMinor: number;
   referral: {
     code: string | null;
@@ -430,6 +436,43 @@ describe("billing", () => {
     });
     expect(checkout.status).toBe(404);
     expect(stripe.state.checkouts).toHaveLength(2);
+  });
+
+  test("cancelling from the portal keeps it active until the period ends; reactivating undoes it", async () => {
+    const shop = await createShop();
+    const { subscription } = await pay(shop);
+    const end = Math.floor(Date.now() / 1000) + 30 * 86_400;
+    const updated = () =>
+      webhook("customer.subscription.updated", {
+        id: subscription,
+        object: "subscription",
+      });
+
+    stripe.setCancelAt(subscription, end);
+    expect((await updated()).status).toBe(200);
+    const cancelling = await summary(shop);
+    expect(cancelling).toMatchObject({ status: "active", subscribed: true });
+    expect(cancelling.cancelAt).toBe(new Date(end * 1000).toISOString());
+    const write = await api("PATCH", "/v1/tenant", {
+      ...shop.asOwner,
+      body: { name: "Sigue activa" },
+    });
+    expect(write.status).toBe(200);
+
+    stripe.setCancelAt(subscription, null);
+    expect((await updated()).status).toBe(200);
+    expect((await summary(shop)).cancelAt).toBeUndefined();
+
+    stripe.setCancelAt(subscription, end);
+    await updated();
+    stripe.setStatus(subscription, "canceled");
+    await webhook("customer.subscription.deleted", {
+      id: subscription,
+      object: "subscription",
+    });
+    const ended = await summary(shop);
+    expect(ended).toMatchObject({ status: "canceled", subscribed: false });
+    expect(ended.cancelAt).toBeUndefined();
   });
 
   test("Stripe ending the subscription locks writes (402); the owner can still reach billing", async () => {

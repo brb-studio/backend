@@ -48,6 +48,8 @@ export type TenantDoc = {
     stripeCustomerId?: string;
     stripeSubscriptionId?: string;
     firstPaidAt?: Date;
+    /** Cancelled from the portal: still active until this date, then Stripe ends it. */
+    cancelAt?: Date;
   };
   /** The code this tenant shares with other barbershops. */
   referralCode?: string;
@@ -462,6 +464,7 @@ export const specs: CollectionSpec[] = [
               stripeCustomerId: string({ pattern: "^cus_\\w+$" }),
               stripeSubscriptionId: string({ pattern: "^sub_\\w+$" }),
               firstPaidAt: date,
+              cancelAt: date,
             },
           },
           referralCode: string({ pattern: REFERRAL_CODE }),

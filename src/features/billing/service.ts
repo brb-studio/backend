@@ -145,6 +145,7 @@ export async function billingSummary(tenant: TenantDoc) {
     plan: tenant.subscription.plan,
     status: tenant.subscription.status,
     currentPeriodEnd: tenant.subscription.currentPeriodEnd,
+    cancelAt: tenant.billing?.cancelAt,
     subscribed: hasLiveSubscription(tenant),
     // Stripe keeps credit as a negative balance and spends it on the next invoices by itself.
     creditMinor:
@@ -381,11 +382,22 @@ async function syncSubscription(subscriptionId: string) {
   const item = sub.items.data[0];
   const plan =
     item?.price.id === price ? SUBSCRIPTION_PLAN : tenant.subscription.plan;
+  // Cancelling from the portal keeps the subscription active until the paid period ends; Stripe marks
+  // it with `cancel_at` (or `cancel_at_period_end` on older API versions). Reactivating clears both.
+  const cancelAtSec =
+    status === "canceled"
+      ? null
+      : (sub.cancel_at ??
+        (sub.cancel_at_period_end ? item?.current_period_end : null));
   const now = new Date();
   await platform.tenants.updateOne(
     { _id: tenant._id },
     {
+      ...(!cancelAtSec && { $unset: { "billing.cancelAt": "" } }),
       $set: {
+        ...(cancelAtSec && {
+          "billing.cancelAt": new Date(cancelAtSec * 1000),
+        }),
         "subscription.plan": plan,
         "subscription.status": status,
         "subscription.limits": PLAN_LIMITS[plan],
