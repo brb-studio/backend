@@ -360,7 +360,8 @@ const idOfRef = (ref: string | { id: string } | null) =>
  * Reads the subscription back from Stripe instead of trusting the event body: events can arrive out of
  * order, the API always has the latest state.
  */
-async function syncSubscription(subscriptionId: string) {
+/** Webhook recovery (or admin resync): pull one subscription from Stripe. */
+export async function syncSubscription(subscriptionId: string) {
   const { price } = billing();
   const sub = await call((stripe) =>
     stripe.subscriptions.retrieve(subscriptionId),
