@@ -1,6 +1,6 @@
 # MagicStudio backend
 
-API for MagicStudio, a multi-tenant SaaS for barbershops. Bun · Hono · Zod · MongoDB. The frontend lives next door in `../magicstudio` and calls this API from its server, never from the browser.
+API for MagicStudio, a multi-tenant SaaS for barbershops. Bun · Hono · Zod · MongoDB. The frontend is [brb-studio/frontend](https://github.com/brb-studio/frontend), cloned next to this repo as `../frontend`, and calls this API from its server, never from the browser.
 
 ## Requirements
 
@@ -10,6 +10,16 @@ API for MagicStudio, a multi-tenant SaaS for barbershops. Bun · Hono · Zod · 
   `mongosh --eval 'rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "127.0.0.1:27017" }] })'`.
 
 ## Setup
+
+Clone both repos side by side (default folder names, any parent folder):
+
+```sh
+mkdir brb-studio && cd brb-studio
+git clone https://github.com/brb-studio/backend.git
+git clone https://github.com/brb-studio/frontend.git
+```
+
+Then, in `backend/`:
 
 ```sh
 cp .env.example .env
@@ -26,7 +36,7 @@ bun run dev        # http://localhost:4000/health
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run audit` | Fails on high/critical advisories |
 | `bun run tenant:create --slug … --name … --plan trial\|basic\|pro\|lifetime --owner-email … --owner-name …` | Creates a tenant and its owner; prints the owner's generated password once |
-| `bun run seed` | Two demo barbershops (`magicstudio`, `elite`) with staff and customer accounts, all with password `demo1234`; skips a tenant that already exists. `--reset` wipes first, only on `*_test` / `*_e2e` databases. Refuses production. Accounts and URLs: `../magicstudio/DEMO.md` |
+| `bun run seed` | Two demo barbershops (`magicstudio`, `elite`) with staff and customer accounts, all with password `demo1234`; skips a tenant that already exists. `--reset` wipes first, only on `*_test` / `*_e2e` databases. Refuses production. Accounts and URLs: `../frontend/DEMO.md` |
 | `bun run vapid:keys` | Prints a VAPID key pair for Web Push (`VAPID_*` in `.env`) |
 
 ## API
@@ -127,3 +137,7 @@ tests/          integration tests (real MongoDB)
 ## Dependency policy
 
 The same as the frontend: exact pins, versions younger than 3 days refused (`bunfig.toml`), no dependency lifecycle scripts (`trustedDependencies: []`), `bun.lock` committed, `bun audit` in CI. Before adding a package: can Bun, TypeScript or an installed package do it? Then the package must show its transitive dependencies, advisories, maintenance and scripts before it goes in.
+
+## Specs (OpenSpec)
+
+Business rules live as behavior specs in `openspec/specs/` (12 capabilities: tenancy, accounts-access, barbers-schedule, catalog, availability, booking, promotions, notifications, appointment-payments, subscription-billing, media, platform-safety), written from the code. `openspec list --specs` lists them, `openspec validate --specs --strict` checks them, and changes start with `/opsx:propose` in Claude Code. Update the spec in the same change as the code.

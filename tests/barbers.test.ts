@@ -291,6 +291,7 @@ describe("public barbers", () => {
         slug: "mateo",
         name: "Mateo",
         specialty: { es: "Degradados" },
+        images: [],
         branch: branchSlug,
       },
     ] as unknown as typeof res.body);

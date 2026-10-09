@@ -40,18 +40,12 @@ export type TenantDoc = {
     chargesEnabled: boolean;
     onboardedAt?: Date;
   };
-  /**
-   * The barbershop paying us (Stripe Billing on the platform account), unlike `stripe`, which is the
-   * Connect account its customers pay. `firstPaidAt` marks the first paid month (referral codes need it).
-   */
   billing?: {
     stripeCustomerId?: string;
     stripeSubscriptionId?: string;
     firstPaidAt?: Date;
-    /** Cancelled from the portal: still active until this date, then Stripe ends it. */
     cancelAt?: Date;
   };
-  /** The code this tenant shares with other barbershops. */
   referralCode?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -59,7 +53,6 @@ export type TenantDoc = {
 
 export const REFERRAL_STATUSES = ["pending", "rewarded", "skipped"] as const;
 
-/** One barbershop bringing another; at most one per referee, ever. */
 export type ReferralDoc = {
   _id: ObjectId;
   referrerTenantId: ObjectId;
@@ -138,7 +131,6 @@ export type BarberDoc = {
   specialty?: Localized;
   bio?: Localized;
   image?: string;
-  /** Photos, cover first (`image` is the single photo of older documents). */
   images?: string[];
   hours: Hours[];
   serviceIds: ObjectId[];
@@ -158,7 +150,6 @@ export type ServiceDoc = {
   durationMin: number;
   priceMinor: number;
   image?: string;
-  /** Photos, cover first (`image` is the single photo of older documents). */
   images?: string[];
   position: number;
   active: boolean;
@@ -176,7 +167,6 @@ export type PackageDoc = {
   priceMinor: number;
   items: { serviceId: ObjectId }[];
   image?: string;
-  /** Photos, cover first (`image` is the single photo of older documents). */
   images?: string[];
   position: number;
   active: boolean;
@@ -205,14 +195,13 @@ export type TimeOffDoc = {
   createdAt: Date;
 };
 
+export type RateLimitDoc = { _id: string; count: number; expiresAt: Date };
+
 export const tenants = db.collection<TenantDoc>("tenants");
 export const referrals = db.collection<ReferralDoc>("referrals");
 export const branches = db.collection<BranchDoc>("branches");
 export const users = db.collection<UserDoc>("users");
 export const sessions = db.collection<SessionDoc>("sessions");
-
-/** One fixed rate-limit window; `_id` is the hashed key (no emails or phones stored). */
-export type RateLimitDoc = { _id: string; count: number; expiresAt: Date };
 export const rateLimits = db.collection<RateLimitDoc>("rateLimits");
 export const barbers = db.collection<BarberDoc>("barbers");
 export const timeOff = db.collection<TimeOffDoc>("timeOff");

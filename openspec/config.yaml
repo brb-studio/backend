@@ -1,0 +1,47 @@
+schema: spec-driven
+
+context: |
+  Language: es
+  All artifacts must be written in es.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Proyecto: MagicStudio backend, API de un SaaS multi-barbería y multi-sucursal. Una empresa
+  compró la app (plan lifetime); las demás barberías la rentan por suscripción mensual.
+  El frontend (Next.js) es el repo brb-studio/frontend, clonado junto a este como ../frontend,
+  y llama a esta API solo desde su servidor.
+
+  Stack: Bun 1.4, TypeScript estricto (sin any), Hono (solo core), Zod 4, driver oficial de
+  MongoDB 7 sobre un replica set local (rs0, transacciones), Stripe (Billing y Connect),
+  pruebas con bun test (unitarias en src/, integración en tests/ contra MongoDB real).
+
+  Convenciones:
+  - Una carpeta por contexto en src/features: routes.ts (solo HTTP) → service.ts (reglas y
+    consultas) → rules.ts (reglas puras, probadas sin base de datos).
+  - Datos de negocio solo por forTenant() en src/db/scoped.ts (agrega tenantId siempre).
+  - Dinero en enteros de unidades menores; instantes en UTC; horarios locales "HH:MM" en la
+    zona IANA de la sucursal (Temporal).
+  - Errores { error: { code, message, issues? } }; códigos estables en MAYÚSCULAS.
+  - Dependencias con versión exacta, 3 días mínimos de antigüedad, sin scripts de instalación.
+  - Sin commits automáticos, sin borrar archivos sin confirmar, solo MongoDB local en desarrollo.
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always state what is out of scope
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
