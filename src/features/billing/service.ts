@@ -1,5 +1,4 @@
-import { ObjectId } from "mongodb";
-import Stripe from "stripe";
+import { ObjectId, type WithId } from "mongodb";
 import type * as z from "zod";
 import { config } from "../../config";
 import { hit } from "../../db/rate-limit";
@@ -7,59 +6,53 @@ import {
   forTenant,
   platform,
   type ReferralDoc,
+  type SubscriptionPaymentDoc,
   type TenantDoc,
+  transaction,
 } from "../../db/scoped";
+import { collect, mapBy } from "../../shared/cursor";
 import { AppError, isDuplicate } from "../../shared/http";
-import { requireStripe } from "../payments/stripe";
-import { tenantQuery } from "../tenancy/service";
+import { isValidClabe } from "../payments/clabe";
 import { PLAN_LIMITS } from "../tenancy/subscription";
 import {
-  hasLiveSubscription,
+  isPaidUp,
   newReferralCode,
+  periodEnd,
   REFERRAL,
   rewardFor,
   SUBSCRIPTION_PLAN,
-  toStatus,
 } from "./rules";
-import type { checkoutInput } from "./schemas";
+import type { paymentInput } from "./schemas";
 
 const HOUR_MS = 60 * 60 * 1000;
-const COUPON_ID = `brb-referral-${REFERRAL.friendPercent}`;
+/** A subscription transfer not confirmed within this long expires; the owner can start a new one. */
+const EXPIRES_AFTER_MS = 5 * 24 * HOUR_MS;
 
-const subscriptionPrice = () => config.STRIPE_SUBSCRIPTION_PRICE;
-
-function billing() {
-  const price = subscriptionPrice();
-  if (!price) {
-    throw new AppError(
-      503,
-      "BILLING_DISABLED",
-      "Subscriptions are not configured on this server",
-    );
-  }
-  return { stripe: requireStripe(), price };
-}
-
-async function call<T>(work: (stripe: Stripe) => Promise<T>) {
-  try {
-    return await work(billing().stripe);
-  } catch (err) {
-    if (!(err instanceof Stripe.errors.StripeError)) throw err;
-    console.error(
-      JSON.stringify({
-        level: "error",
-        event: "stripe_billing_error",
-        type: err.type,
-        code: err.code,
-        message: err.message,
-      }),
-    );
-    throw new AppError(502, "PAYMENT_ERROR", "Payment provider error");
-  }
-}
+const price = () => ({
+  amountMinor: config.SUBSCRIPTION_PRICE_MINOR,
+  currency: config.SUBSCRIPTION_CURRENCY,
+  interval: "month" as const,
+});
 
 const ownerOf = (tenantId: ObjectId) =>
   forTenant(tenantId).users.findOne({ role: "owner" });
+
+/** The project owner's account (collection `ownerProject`), checked on every use: a typo here sends money nowhere. */
+async function receivingAccount() {
+  const owner = await platform.ownerProject.findOne({
+    active: true,
+    bankAccountKey: { $exists: true },
+  });
+  const clabe = owner?.bankAccountKey;
+  if (!owner || !clabe || !isValidClabe(clabe)) {
+    throw new AppError(
+      503,
+      "BILLING_DISABLED",
+      "The platform has no valid bank account to receive subscriptions",
+    );
+  }
+  return { clabe, holder: owner.name };
+}
 
 async function ensureReferralCode(tenant: TenantDoc) {
   if (tenant.referralCode) return tenant.referralCode;
@@ -81,29 +74,42 @@ async function ensureReferralCode(tenant: TenantDoc) {
   throw new AppError(500, "INTERNAL", "Could not create a referral code");
 }
 
-let priceInfo:
-  | Promise<{ amountMinor: number; currency: string; interval: string }>
-  | undefined;
+const view = (p: SubscriptionPaymentDoc) => ({
+  id: p._id.toHexString(),
+  status: p.status,
+  amountMinor: p.amountMinor,
+  listPriceMinor: p.listPriceMinor,
+  discountMinor: p.discountMinor,
+  creditAppliedMinor: p.creditAppliedMinor,
+  currency: p.currency,
+  holder: p.bank.holder,
+  clabe: p.bank.clabe,
+  createdAt: p.createdAt,
+  expiresAt: p.expiresAt,
+  ...(p.referral && { referralCode: p.referral.code }),
+  ...(p.reference && { reference: p.reference }),
+  ...(p.resolvedAt && { resolvedAt: p.resolvedAt }),
+  ...(p.rejectionReason && { rejectionReason: p.rejectionReason }),
+});
 
-/** What the subscription costs, read once from Stripe so the price is set in one place only. */
-function subscriptionPriceInfo() {
-  priceInfo ??= call(async (stripe) => {
-    const price = await stripe.prices.retrieve(billing().price);
-    return {
-      amountMinor: price.unit_amount ?? 0,
-      currency: price.currency.toUpperCase(),
-      interval: price.recurring?.interval ?? "month",
-    };
-  }).catch((err) => {
-    priceInfo = undefined;
-    throw err;
-  });
-  return priceInfo;
+/** Unconfirmed transfers past their deadline become `expired`; nothing else depends on it. */
+async function expireStale() {
+  const now = new Date();
+  await platform.subscriptionPayments.updateMany(
+    { status: "pending", expiresAt: { $lte: now } },
+    {
+      $set: { status: "expired", resolvedAt: now },
+      $push: { history: { status: "expired", at: now } },
+    },
+  );
 }
 
+const pendingOf = (tenantId: ObjectId) =>
+  platform.subscriptionPayments.findOne({ tenantId, status: "pending" });
+
 export async function billingSummary(tenant: TenantDoc) {
+  await expireStale();
   const code = await ensureReferralCode(tenant);
-  const price = subscriptionPrice() ? await subscriptionPriceInfo() : null;
   const stats = { referred: 0, rewarded: 0, earnedMinor: 0 };
   const referrals = platform.referrals
     .find({ referrerTenantId: tenant._id })
@@ -118,29 +124,25 @@ export async function billingSummary(tenant: TenantDoc) {
       stats.earnedMinor += referral.rewardMinor;
     }
   }
-  const customerId = tenant.billing?.stripeCustomerId;
-  const customer =
-    customerId &&
-    (await call((stripe) => stripe.customers.retrieve(customerId)));
-  const referredBy = await platform.referrals.findOne({
-    refereeTenantId: tenant._id,
-  });
+  const [referredBy, pending] = await Promise.all([
+    platform.referrals.findOne({ refereeTenantId: tenant._id }),
+    pendingOf(tenant._id),
+  ]);
   return {
-    price,
+    price: price(),
     plan: tenant.subscription.plan,
     status: tenant.subscription.status,
     currentPeriodEnd: tenant.subscription.currentPeriodEnd,
-    cancelAt: tenant.billing?.cancelAt,
-    subscribed: hasLiveSubscription(tenant),
-    creditMinor:
-      customer && !customer.deleted ? Math.max(0, -customer.balance) : 0,
+    subscribed: isPaidUp(tenant, new Date()),
+    creditMinor: tenant.billing?.creditMinor ?? 0,
+    pending: pending ? view(pending) : null,
     referral: {
       code: code ?? null,
       friendPercent: REFERRAL.friendPercent,
       rewardPercent: REFERRAL.rewardPercent,
-      referred: stats?.referred ?? 0,
-      rewarded: stats?.rewarded ?? 0,
-      earnedMinor: stats?.earnedMinor ?? 0,
+      referred: stats.referred,
+      rewarded: stats.rewarded,
+      earnedMinor: stats.earnedMinor,
     },
     ...(referredBy && {
       referredBy: { discountPercent: referredBy.discountPercent },
@@ -183,326 +185,270 @@ export async function checkReferral(tenant: TenantDoc, code: string) {
   return { referrer, code, discountPercent: REFERRAL.friendPercent };
 }
 
-// ---------- checkout and portal ----------
-
-/** The return URL must point at this tenant's own site, or checkout becomes an open redirect. */
-function assertOwnUrl(tenant: TenantDoc, raw: string) {
-  const url = new URL(raw);
-  const query = tenantQuery(url.host);
-  const own =
-    query &&
-    (("slug" in query && query.slug === tenant.slug) ||
-      ("customDomain" in query && query.customDomain === tenant.customDomain));
-  if (!own || (config.NODE_ENV === "production" && url.protocol !== "https:")) {
-    throw new AppError(422, "VALIDATION", "Invalid request", [
-      { path: "returnUrl", message: "must be this barbershop's site" },
-    ]);
-  }
-  return url;
-}
-
-const withParam = (url: URL, key: string, value: string) => {
-  const copy = new URL(url);
-  copy.searchParams.set(key, value);
-  return copy.toString();
-};
-
-async function ensureCustomer(tenant: TenantDoc) {
-  if (tenant.billing?.stripeCustomerId) return tenant.billing.stripeCustomerId;
-  const owner = await ownerOf(tenant._id);
-  const customer = await call((stripe) =>
-    stripe.customers.create(
-      {
-        name: tenant.name,
-        ...(owner && { email: owner.email }),
-        metadata: { tenantId: tenant._id.toHexString(), slug: tenant.slug },
-      },
-      { idempotencyKey: `customer-${tenant._id}` },
-    ),
-  );
-  await platform.tenants.updateOne(
-    { _id: tenant._id, "billing.stripeCustomerId": { $exists: false } },
-    { $set: { "billing.stripeCustomerId": customer.id } },
-  );
-  const saved = await platform.tenants.findOne({ _id: tenant._id });
-  return saved?.billing?.stripeCustomerId ?? customer.id;
-}
-
-let couponReady: Promise<void> | undefined;
-
-/** The friend's discount: one Stripe coupon, created once, applied to one invoice only. */
-function ensureCoupon() {
-  couponReady ??= call(async (stripe) => {
-    try {
-      await stripe.coupons.create({
-        id: COUPON_ID,
-        percent_off: REFERRAL.friendPercent,
-        duration: "once",
-        name: `Referido ${REFERRAL.friendPercent}%`,
-      });
-    } catch (err) {
-      if (
-        !(err instanceof Stripe.errors.StripeError) ||
-        err.code !== "resource_already_exists"
-      ) {
-        throw err;
-      }
-    }
-  }).catch((err) => {
-    couponReady = undefined;
-    throw err;
-  });
-  return couponReady;
-}
-
-export async function startCheckout(
+/**
+ * The owner asks to pay a month. The amount is the list price minus the friend's discount (first month
+ * only) minus referral credit, all computed here; the account is the project owner's, copied into the
+ * payment so later edits can't redirect it. Asking again while one is pending returns the same one.
+ */
+export async function createPayment(
   tenant: TenantDoc,
-  input: z.output<typeof checkoutInput>,
+  input: z.output<typeof paymentInput>,
 ) {
-  const { price } = billing();
-  const returnUrl = assertOwnUrl(tenant, input.returnUrl);
   if (tenant.subscription.plan === "lifetime") {
     throw new AppError(409, "LIFETIME_PLAN", "This barbershop never pays");
   }
-  if (hasLiveSubscription(tenant)) {
-    throw new AppError(
-      409,
-      "ALREADY_SUBSCRIBED",
-      "Already subscribed; manage it from the billing portal",
-    );
-  }
+  await expireStale();
+  const existing = await pendingOf(tenant._id);
+  if (existing) return view(existing);
   const referral =
     input.referralCode !== undefined
       ? await checkReferral(tenant, input.referralCode)
       : undefined;
-  if (!(await hit(`checkout:${tenant._id}`, 10, HOUR_MS))) {
+  if (!(await hit(`pay-subscription:${tenant._id}`, 10, HOUR_MS))) {
     throw new AppError(
       429,
       "RATE_LIMITED",
       "Too many attempts, try again later",
     );
   }
-  const customer = await ensureCustomer(tenant);
-  if (referral) await ensureCoupon();
-  const tenantId = tenant._id.toHexString();
-  const session = await call((stripe) =>
-    stripe.checkout.sessions.create({
-      mode: "subscription",
-      customer,
-      client_reference_id: tenantId,
-      line_items: [{ price, quantity: 1 }],
-      locale: tenant.defaultLocale,
-      success_url: withParam(returnUrl, "checkout", "success"),
-      cancel_url: withParam(returnUrl, "checkout", "cancel"),
-      metadata: {
-        tenantId,
-        ...(referral && {
-          referrerTenantId: referral.referrer._id.toHexString(),
-          referralCode: referral.code,
-        }),
-      },
-      subscription_data: { metadata: { tenantId } },
-      ...(referral && { discounts: [{ coupon: COUPON_ID }] }),
-    }),
+  const bank = await receivingAccount();
+  const { amountMinor: listPriceMinor, currency } = price();
+  const discountMinor = referral
+    ? Math.round((listPriceMinor * REFERRAL.friendPercent) / 100)
+    : 0;
+  const creditAppliedMinor = Math.min(
+    tenant.billing?.creditMinor ?? 0,
+    listPriceMinor - discountMinor,
   );
-  if (!session.url) {
-    throw new AppError(502, "PAYMENT_ERROR", "Stripe gave no checkout URL");
-  }
-  return { url: session.url };
-}
-
-export async function openPortal(tenant: TenantDoc, rawReturnUrl: string) {
-  const returnUrl = assertOwnUrl(tenant, rawReturnUrl);
-  const customer = tenant.billing?.stripeCustomerId;
-  if (!customer) {
-    throw new AppError(409, "NO_BILLING_ACCOUNT", "Nothing paid yet");
-  }
-  const session = await call((stripe) =>
-    stripe.billingPortal.sessions.create({
-      customer,
-      return_url: returnUrl.toString(),
-    }),
-  );
-  return { url: session.url };
-}
-
-// ---------- webhooks ----------
-
-const TERMINAL = new Set(["canceled", "incomplete_expired"]);
-
-const idOf = (hex: string | null | undefined) =>
-  hex && /^[a-f\d]{24}$/.test(hex) ? new ObjectId(hex) : undefined;
-
-const idOfRef = (ref: string | { id: string } | null) =>
-  typeof ref === "string" ? ref : ref?.id;
-
-/**
- * Reads the subscription back from Stripe instead of trusting the event body: events can arrive out of
- * order, the API always has the latest state.
- */
-/** Webhook recovery (or admin resync): pull one subscription from Stripe. */
-export async function syncSubscription(subscriptionId: string) {
-  const { price } = billing();
-  const sub = await call((stripe) =>
-    stripe.subscriptions.retrieve(subscriptionId),
-  );
-  const customerId = idOfRef(sub.customer);
-  const metadataId = idOf(sub.metadata?.tenantId);
-  const tenant =
-    (customerId &&
-      (await platform.tenants.findOne({
-        "billing.stripeCustomerId": customerId,
-      }))) ||
-    (metadataId && (await platform.tenants.findOne({ _id: metadataId })));
-  if (!tenant || tenant.subscription.plan === "lifetime") return;
-  const current = tenant.billing?.stripeSubscriptionId;
-  // An old, ended subscription must not overwrite the one that replaced it.
-  if (current && current !== sub.id && TERMINAL.has(sub.status)) return;
-  const status = toStatus(sub.status);
-  if (!status) return;
-  const item = sub.items.data[0];
-  const plan =
-    item?.price.id === price ? SUBSCRIPTION_PLAN : tenant.subscription.plan;
-  // Cancelling from the portal keeps the subscription active until the paid period ends; Stripe marks
-  // it with `cancel_at` (or `cancel_at_period_end` on older API versions). Reactivating clears both.
-  const cancelAtSec =
-    status === "canceled"
-      ? null
-      : (sub.cancel_at ??
-        (sub.cancel_at_period_end ? item?.current_period_end : null));
   const now = new Date();
-  await platform.tenants.updateOne(
-    { _id: tenant._id },
-    {
-      ...(!cancelAtSec && { $unset: { "billing.cancelAt": "" } }),
-      $set: {
-        ...(cancelAtSec && {
-          "billing.cancelAt": new Date(cancelAtSec * 1000),
-        }),
-        "subscription.plan": plan,
-        "subscription.status": status,
-        "subscription.limits": PLAN_LIMITS[plan],
-        ...(item && {
-          "subscription.currentPeriodEnd": new Date(
-            item.current_period_end * 1000,
-          ),
-        }),
-        ...(customerId && { "billing.stripeCustomerId": customerId }),
-        "billing.stripeSubscriptionId": sub.id,
-        updatedAt: now,
+  const payment: SubscriptionPaymentDoc = {
+    _id: new ObjectId(),
+    tenantId: tenant._id,
+    status: "pending",
+    amountMinor: listPriceMinor - discountMinor - creditAppliedMinor,
+    listPriceMinor,
+    discountMinor,
+    creditAppliedMinor,
+    currency,
+    bank,
+    ...(referral && {
+      referral: {
+        referrerTenantId: referral.referrer._id,
+        code: referral.code,
+        discountPercent: referral.discountPercent,
       },
-      ...(status === "active" && { $min: { "billing.firstPaidAt": now } }),
-    },
-  );
+    }),
+    createdAt: now,
+    expiresAt: new Date(now.getTime() + EXPIRES_AFTER_MS),
+    history: [{ status: "pending", at: now }],
+  };
+  try {
+    await platform.subscriptionPayments.insertOne(payment);
+  } catch (err) {
+    // Two requests raced: the unique index let only one in, so hand back the winner.
+    const winner = isDuplicate(err) && (await pendingOf(tenant._id));
+    if (winner) return view(winner);
+    throw err;
+  }
+  // Credit covering the whole month leaves nothing to transfer: it is settled right away.
+  if (payment.amountMinor === 0) return view(await settle(payment._id));
+  return view(payment);
 }
+
+const invalidTransition = () =>
+  new AppError(
+    409,
+    "INVALID_TRANSITION",
+    "This payment was already resolved or has expired",
+  );
 
 /**
- * Credits the referrer once the friend's first month is paid. Retried webhooks are safe: one referral per
- * referee (unique index), and the Stripe credit carries an idempotency key.
+ * pending → paid, once, in one transaction: the payment, the new period and plan, the credit spent, and
+ * the referral reward. The status filter makes a repeated call change nothing.
  */
-async function rewardReferral(
-  session: Stripe.Checkout.Session,
-  refereeTenantId: ObjectId,
+async function settle(
+  paymentId: ObjectId,
+  staffId?: ObjectId,
+  reference?: string,
 ) {
-  const referrerTenantId = idOf(session.metadata?.referrerTenantId);
-  const code = session.metadata?.referralCode;
-  if (!referrerTenantId || !code || !session.currency) return;
-  const subtotal = session.amount_subtotal ?? 0;
-  const referral: ReferralDoc = {
-    _id: new ObjectId(),
-    referrerTenantId,
-    refereeTenantId,
-    code,
-    discountPercent: REFERRAL.friendPercent,
-    status: "pending",
-    checkoutSessionId: session.id,
-    currency: session.currency,
-    subtotalMinor: subtotal,
-    rewardMinor: rewardFor(subtotal),
-    createdAt: new Date(),
-  };
-  await platform.referrals.insertOne(referral).catch((err) => {
-    if (!isDuplicate(err)) throw err;
-  });
-  const pending = await platform.referrals.findOne({
-    refereeTenantId,
-    status: "pending",
-  });
-  if (!pending) return;
-  const referrer = await platform.tenants.findOne({
-    _id: pending.referrerTenantId,
-  });
-  const customer = referrer?.billing?.stripeCustomerId;
-  if (!customer || pending.rewardMinor === 0) {
-    await platform.referrals.updateOne(
-      { _id: pending._id, status: "pending" },
-      { $set: { status: "skipped" } },
+  const now = new Date();
+  return transaction(async (session) => {
+    const payment = await platform.subscriptionPayments.findOne(
+      { _id: paymentId },
+      { session },
     );
-    return;
-  }
-  const credit = await call((stripe) =>
-    stripe.customers.createBalanceTransaction(
-      customer,
+    if (!payment) throw new AppError(404, "NOT_FOUND", "Not found");
+    if (payment.status !== "pending") throw invalidTransition();
+    const { matchedCount } = await platform.subscriptionPayments.updateOne(
+      { _id: payment._id, status: "pending" },
       {
-        amount: -pending.rewardMinor,
-        currency: pending.currency,
-        description: "Crédito por referido",
-        metadata: { referralId: pending._id.toHexString() },
+        $set: {
+          status: "paid",
+          resolvedAt: now,
+          ...(staffId && { resolvedBy: staffId }),
+          ...(reference && { reference }),
+        },
+        $push: {
+          history: { status: "paid", at: now, ...(staffId && { by: staffId }) },
+        },
       },
-      { idempotencyKey: `referral-reward-${pending._id}` },
-    ),
-  );
-  await platform.referrals.updateOne(
-    { _id: pending._id, status: "pending" },
-    {
-      $set: {
-        status: "rewarded",
-        stripeBalanceTransactionId: credit.id,
-        rewardedAt: new Date(),
+      { session },
+    );
+    if (matchedCount === 0) throw invalidTransition();
+
+    const tenant = await platform.tenants.findOne(
+      { _id: payment.tenantId },
+      { session },
+    );
+    if (!tenant) throw new AppError(404, "NOT_FOUND", "Not found");
+    const credit = payment.creditAppliedMinor;
+    const updated = await platform.tenants.updateOne(
+      {
+        _id: tenant._id,
+        ...(credit > 0 && { "billing.creditMinor": { $gte: credit } }),
       },
-    },
-  );
+      {
+        $set: {
+          "subscription.plan": SUBSCRIPTION_PLAN,
+          "subscription.status": "active",
+          "subscription.limits": PLAN_LIMITS[SUBSCRIPTION_PLAN],
+          "subscription.currentPeriodEnd": periodEnd(
+            tenant.subscription.currentPeriodEnd,
+            now,
+          ),
+          updatedAt: now,
+        },
+        $min: { "billing.firstPaidAt": now },
+        ...(credit > 0 && { $inc: { "billing.creditMinor": -credit } }),
+      },
+      { session },
+    );
+    if (updated.matchedCount === 0) {
+      throw new AppError(
+        409,
+        "CREDIT_CHANGED",
+        "The referral credit changed since this payment was requested",
+      );
+    }
+
+    const alreadyReferred = await platform.referrals.findOne(
+      { refereeTenantId: tenant._id },
+      { session },
+    );
+    if (payment.referral && !alreadyReferred) {
+      const rewardMinor = rewardFor(payment.listPriceMinor);
+      const referral: ReferralDoc = {
+        _id: new ObjectId(),
+        referrerTenantId: payment.referral.referrerTenantId,
+        refereeTenantId: tenant._id,
+        code: payment.referral.code,
+        discountPercent: payment.referral.discountPercent,
+        status: rewardMinor > 0 ? "rewarded" : "skipped",
+        paymentId: payment._id,
+        currency: payment.currency,
+        subtotalMinor: payment.listPriceMinor,
+        rewardMinor,
+        createdAt: now,
+        ...(rewardMinor > 0 && { rewardedAt: now }),
+      };
+      await platform.referrals.insertOne(referral, { session });
+      if (rewardMinor > 0) {
+        await platform.tenants.updateOne(
+          { _id: referral.referrerTenantId },
+          { $inc: { "billing.creditMinor": rewardMinor } },
+          { session },
+        );
+      }
+    }
+    const settled = await platform.subscriptionPayments.findOne(
+      { _id: payment._id },
+      { session },
+    );
+    if (!settled) throw new AppError(404, "NOT_FOUND", "Not found");
+    return settled;
+  });
 }
 
-async function checkoutCompleted(session: Stripe.Checkout.Session) {
-  if (session.mode !== "subscription" || session.payment_status !== "paid") {
-    return;
-  }
-  const tenantId = idOf(session.client_reference_id);
-  const customer = idOfRef(session.customer);
-  const subscription = idOfRef(session.subscription);
-  const tenant =
-    tenantId && (await platform.tenants.findOne({ _id: tenantId }));
-  if (!tenant || !customer || !subscription) return;
-  await platform.tenants.updateOne(
-    { _id: tenant._id },
-    {
-      $set: {
-        "billing.stripeCustomerId": customer,
-        "billing.stripeSubscriptionId": subscription,
-        updatedAt: new Date(),
-      },
-      $min: { "billing.firstPaidAt": new Date() },
-    },
+// ---------- platform staff ----------
+
+type TenantName = Pick<TenantDoc, "name" | "slug">;
+
+export async function listPayments(status: SubscriptionPaymentDoc["status"]) {
+  await expireStale();
+  const payments = await collect(
+    platform.subscriptionPayments
+      .find({ status })
+      .sort({ createdAt: -1 })
+      .limit(100),
   );
-  await syncSubscription(subscription);
-  await rewardReferral(session, tenant._id);
+  const tenants = await mapBy(
+    platform.tenants
+      .find({ _id: { $in: payments.map((p) => p.tenantId) } })
+      .project<WithId<TenantName>>({ name: 1, slug: 1 }),
+    (t) => t._id.toHexString(),
+  );
+  return payments.map((p) => {
+    const tenant = tenants.get(p.tenantId.toHexString());
+    return {
+      ...view(p),
+      tenantName: tenant?.name ?? null,
+      tenantSlug: tenant?.slug ?? null,
+      history: p.history,
+    };
+  });
 }
 
-/** Platform-account events about subscriptions. Connected-account events belong to features/payments. */
-export async function handleBillingEvent(event: Stripe.Event) {
-  if (event.account || !subscriptionPrice()) return;
-  switch (event.type) {
-    case "checkout.session.completed":
-    case "checkout.session.async_payment_succeeded":
-      await checkoutCompleted(event.data.object);
-      break;
-    case "customer.subscription.created":
-    case "customer.subscription.updated":
-    case "customer.subscription.deleted":
-      await syncSubscription(event.data.object.id);
-      break;
-    default:
-      break;
+export async function confirmPayment(
+  staffId: ObjectId,
+  paymentId: ObjectId,
+  input: { receivedMinor: number; reference?: string },
+) {
+  await expireStale();
+  const payment = await platform.subscriptionPayments.findOne({
+    _id: paymentId,
+  });
+  if (!payment) throw new AppError(404, "NOT_FOUND", "Not found");
+  if (payment.status !== "pending") throw invalidTransition();
+  if (input.receivedMinor !== payment.amountMinor) {
+    throw new AppError(
+      422,
+      "AMOUNT_MISMATCH",
+      "The amount received does not match the amount owed",
+    );
   }
+  return view(await settle(payment._id, staffId, input.reference));
+}
+
+export async function rejectPayment(
+  staffId: ObjectId,
+  paymentId: ObjectId,
+  input: { reason?: string },
+) {
+  await expireStale();
+  const now = new Date();
+  const rejected = await platform.subscriptionPayments.findOneAndUpdate(
+    { _id: paymentId, status: "pending" },
+    {
+      $set: {
+        status: "rejected",
+        resolvedAt: now,
+        resolvedBy: staffId,
+        ...(input.reason && { rejectionReason: input.reason }),
+      },
+      $push: {
+        history: {
+          status: "rejected",
+          at: now,
+          by: staffId,
+          ...(input.reason && { note: input.reason }),
+        },
+      },
+    },
+    { returnDocument: "after" },
+  );
+  if (rejected) return view(rejected);
+  if (!(await platform.subscriptionPayments.findOne({ _id: paymentId }))) {
+    throw new AppError(404, "NOT_FOUND", "Not found");
+  }
+  throw invalidTransition();
 }

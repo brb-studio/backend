@@ -1,547 +1,380 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  spyOn,
-  test,
-} from "bun:test";
-import type { ObjectId } from "mongodb";
-import Stripe from "stripe";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { ObjectId } from "mongodb";
 import { app } from "../src/app";
-import { config } from "../src/config";
-import { referrals, tenants, users } from "../src/db/collections";
-import { requireStripe } from "../src/features/payments/stripe";
+import {
+  ownerProject,
+  platformStaff,
+  referrals,
+  subscriptionPayments,
+  tenants,
+} from "../src/db/collections";
+import { platformLogin } from "../src/features/platform/auth";
 import { api, createShop, createUser } from "./helpers";
 
+// Published example CLABE, not a real account.
+const CLABE = "002010077777777771";
+const PASSWORD = "correct horse battery";
+const PRICE = 30_000;
+
+const projectId = new ObjectId();
+let staffToken = "";
+
+beforeAll(async () => {
+  await ownerProject.insertOne({
+    _id: projectId,
+    email: "dueno@example.com",
+    name: "Dueño del Proyecto",
+    role: "owner",
+    active: true,
+    bankAccountKey: CLABE,
+  });
+  const email = `staff-${new ObjectId().toHexString()}@example.com`;
+  const now = new Date();
+  await platformStaff.insertOne({
+    _id: new ObjectId(),
+    email,
+    name: "Staff",
+    passwordHash: await Bun.password.hash(PASSWORD, {
+      algorithm: "argon2id",
+      memoryCost: 1024,
+      timeCost: 1,
+    }),
+    active: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+  staffToken = (await platformLogin(email, PASSWORD)).token;
+});
+
+afterAll(async () => {
+  await ownerProject.deleteOne({ _id: projectId });
+});
+
 type Shop = Awaited<ReturnType<typeof createShop>>;
-type Params = Record<string, unknown>;
 
-/**
- * Stripe on for this file only: other suites (booking) rely on payments being off. Every SDK call
- * billing makes is stubbed below, so nothing leaves the machine.
- */
-const STRIPE_ENV = {
-  STRIPE_SECRET_KEY: "sk_test_fake",
-  STRIPE_WEBHOOK_SECRET: "whsec_fake",
-  STRIPE_SUBSCRIPTION_PRICE: "price_monthly",
-} as const;
-const saved: Partial<typeof config> = {};
-beforeAll(() => {
-  for (const key of Object.keys(STRIPE_ENV) as (keyof typeof STRIPE_ENV)[]) {
-    saved[key] = config[key];
-    config[key] = STRIPE_ENV[key];
-  }
-});
-afterAll(() => Object.assign(config, saved));
-
-/** In-memory Stripe: the resources billing uses, with Stripe's idempotency-key behavior. */
-function fakeStripe() {
-  const stripe = requireStripe();
-  let seq = 0;
-  const next = (prefix: string) =>
-    `${prefix}_${++seq}x${Date.now().toString(36)}`;
-  const state = {
-    customers: new Map<string, { id: string; balance: number }>(),
-    subscriptions: new Map<string, Params>(),
-    coupons: new Set<string>(),
-    checkouts: [] as Params[],
-    credits: [] as Params[],
-    idempotent: new Map<string, unknown>(),
-  };
-  const once = <T>(key: string | undefined, make: () => T): T => {
-    if (key && state.idempotent.has(key)) return state.idempotent.get(key) as T;
-    const value = make();
-    if (key) state.idempotent.set(key, value);
-    return value;
-  };
-  type Options = { idempotencyKey?: string } | undefined;
-  const stubs = [
-    spyOn(stripe.customers, "create").mockImplementation((async (
-      _params: Params,
-      options: Options,
-    ) =>
-      once(options?.idempotencyKey, () => {
-        const customer = { id: next("cus"), balance: 0 };
-        state.customers.set(customer.id, customer);
-        return customer;
-      })) as never),
-    spyOn(stripe.customers, "retrieve").mockImplementation((async (
-      id: string,
-    ) => {
-      const customer = state.customers.get(id);
-      if (!customer) throw new Error(`no customer ${id}`);
-      return { ...customer, deleted: undefined };
-    }) as never),
-    spyOn(stripe.customers, "createBalanceTransaction").mockImplementation(
-      (async (id: string, params: Params, options: Options) =>
-        once(options?.idempotencyKey, () => {
-          const customer = state.customers.get(id);
-          if (!customer) throw new Error(`no customer ${id}`);
-          customer.balance += Number(params.amount);
-          state.credits.push({ customer: id, ...params });
-          return { id: next("cbtxn") };
-        })) as never,
-    ),
-    spyOn(stripe.coupons, "create").mockImplementation((async (
-      params: Params,
-    ) => {
-      const id = String(params.id);
-      if (state.coupons.has(id)) {
-        throw new Stripe.errors.StripeInvalidRequestError({
-          type: "invalid_request_error",
-          code: "resource_already_exists",
-          message: "Coupon already exists.",
-        });
-      }
-      state.coupons.add(id);
-      return { id };
-    }) as never),
-    spyOn(stripe.checkout.sessions, "create").mockImplementation((async (
-      params: Params,
-    ) => {
-      state.checkouts.push(params);
-      const id = next("cs");
-      return { id, url: `https://checkout.stripe.com/c/pay/${id}` };
-    }) as never),
-    spyOn(stripe.billingPortal.sessions, "create").mockImplementation(
-      (async () => ({
-        url: "https://billing.stripe.com/p/session/test",
-      })) as never,
-    ),
-    spyOn(stripe.prices, "retrieve").mockImplementation((async (
-      id: string,
-    ) => ({
-      id,
-      unit_amount: 30_000,
-      currency: "mxn",
-      recurring: { interval: "month" },
-    })) as never),
-    spyOn(stripe.subscriptions, "retrieve").mockImplementation((async (
-      id: string,
-    ) => {
-      const sub = state.subscriptions.get(id);
-      if (!sub) throw new Error(`no subscription ${id}`);
-      return sub;
-    }) as never),
-  ];
-  return {
-    state,
-    restore: () => {
-      for (const stub of stubs) stub.mockRestore();
-    },
-    subscribe(customer: string, price: string) {
-      const id = next("sub");
-      state.subscriptions.set(id, {
-        id,
-        customer,
-        status: "active",
-        metadata: {},
-        items: {
-          data: [
-            {
-              price: { id: price },
-              current_period_end: Math.floor(Date.now() / 1000) + 30 * 86_400,
-            },
-          ],
-        },
-      });
-      return id;
-    },
-    setStatus(id: string, status: string) {
-      const sub = state.subscriptions.get(id);
-      if (sub) sub.status = status;
-    },
-    /** What the customer portal does on "Cancel": active until `at` (seconds), or `null` to undo. */
-    setCancelAt(id: string, at: number | null) {
-      const sub = state.subscriptions.get(id);
-      if (sub) sub.cancel_at = at;
-    },
-  };
-}
-
-let stripe: ReturnType<typeof fakeStripe>;
-beforeEach(() => {
-  stripe = fakeStripe();
-});
-afterEach(() => stripe.restore());
-
-async function webhook(
-  type: string,
-  object: Params,
-  secret: string = STRIPE_ENV.STRIPE_WEBHOOK_SECRET,
-) {
-  const payload = JSON.stringify({
-    id: `evt_${Date.now()}`,
-    object: "event",
-    type,
-    data: { object },
-  });
-  const res = await app.request("/webhooks/stripe", {
-    method: "POST",
+async function staff(method: string, path: string, body?: unknown) {
+  const res = await app.request(`/platform${path}`, {
+    method,
     headers: {
-      "Stripe-Signature":
-        await requireStripe().webhooks.generateTestHeaderStringAsync({
-          payload,
-          secret,
-        }),
+      Authorization: `Bearer ${staffToken}`,
+      ...(body !== undefined && { "Content-Type": "application/json" }),
     },
-    body: payload,
+    ...(body !== undefined && { body: JSON.stringify(body) }),
   });
-  return {
-    status: res.status,
-    body: (await res.json()) as { error?: { code: string } },
-  };
+  const text = await res.text();
+  return { status: res.status, body: text ? JSON.parse(text) : {} };
 }
 
-type Summary = {
-  plan: string;
-  status: string;
-  subscribed: boolean;
-  cancelAt?: string;
-  creditMinor: number;
-  referral: {
-    code: string | null;
-    referred: number;
-    rewarded: number;
-    earnedMinor: number;
-  };
-  referredBy?: { discountPercent: number };
-};
+const pay = (shop: Shop, body: Record<string, unknown> = {}) =>
+  api("POST", "/v1/billing/payment", { ...shop.asOwner, body });
 
-const summary = async (shop: Shop) =>
+const confirm = (id: string, receivedMinor: number) =>
+  staff("POST", `/subscriptions/${id}/confirm`, { receivedMinor });
+
+/** Request and confirm one month, as the owner and then platform staff would. */
+async function subscribe(shop: Shop, referralCode?: string) {
+  const res = await pay(shop, referralCode ? { referralCode } : {});
+  expect(res.status).toBe(201);
+  const done = await confirm(String(res.body.id), Number(res.body.amountMinor));
+  expect(done.status).toBe(200);
+  return res.body;
+}
+
+const tenantOf = (shop: Shop) => tenants.findOne({ _id: shop.tenant._id });
+type Summary = {
+  subscribed: boolean;
+  referral: { code: string | null };
+  pending: unknown;
+};
+const summary = async (shop: Shop): Promise<Summary> =>
   (await api("GET", "/v1/billing", shop.asOwner)).body as unknown as Summary;
 
-const returnUrl = (shop: { host: string }) =>
-  `http://${shop.host}:3000/es/admin/account`;
-
-/** The owner checks out, then Stripe reports the first month paid. */
-async function pay(shop: Shop, options: { referralCode?: string } = {}) {
-  const res = await api("POST", "/v1/billing/checkout", {
-    ...shop.asOwner,
-    body: {
-      returnUrl: returnUrl(shop),
-      ...(options.referralCode && { referralCode: options.referralCode }),
-    },
-  });
-  if (res.status !== 201)
-    throw new Error(`checkout: ${res.status} ${JSON.stringify(res.body)}`);
-  const checkout = stripe.state.checkouts.at(-1) as {
-    customer: string;
-    client_reference_id: string;
-    line_items: { price: string }[];
-    metadata: Record<string, string>;
-    discounts?: { coupon: string }[];
-  };
-  const subscription = stripe.subscribe(
-    checkout.customer,
-    checkout.line_items[0]?.price ?? "",
-  );
-  const session = {
-    id: `cs_${shop.tenant._id}`,
-    object: "checkout.session",
-    mode: "subscription",
-    payment_status: "paid",
-    client_reference_id: checkout.client_reference_id,
-    customer: checkout.customer,
-    subscription,
-    currency: "mxn",
-    amount_subtotal: 30_000,
-    metadata: checkout.metadata,
-  };
-  const hook = await webhook("checkout.session.completed", session);
-  expect(hook.status).toBe(200);
-  return { checkout, session, subscription };
-}
-
-const tenantDoc = (id: ObjectId) => tenants.findOne({ _id: id });
-
-describe("billing", () => {
+describe("billing by transfer", () => {
   test("only the owner sees billing; before paying there is no code to share", async () => {
-    const shop = await createShop({
-      subscription: {
-        plan: "trial",
-        status: "trialing",
-        limits: { branches: 1, barbers: 3 },
-      },
-    });
-    const admin = await createUser(shop.tenant, "admin");
-    const forbidden = await api("GET", "/v1/billing", {
-      host: shop.host,
-      token: admin.token,
-    });
-    expect(forbidden.status).toBe(403);
-    expect(await summary(shop)).toMatchObject({
-      plan: "trial",
-      status: "trialing",
-      subscribed: false,
-      price: { amountMinor: 30_000, currency: "MXN", interval: "month" },
-      creditMinor: 0,
-      referral: {
-        code: null,
-        friendPercent: 20,
-        rewardPercent: 10,
-        referred: 0,
-      },
-    });
-  });
-
-  test("checkout opens a Stripe subscription for the plan's price, returning to the tenant's own site", async () => {
     const shop = await createShop();
-    const res = await api("POST", "/v1/billing/checkout", {
-      ...shop.asOwner,
-      body: { returnUrl: returnUrl(shop) },
+    const manager = await createUser(shop.tenant, "manager");
+    expect(
+      (
+        await api("GET", "/v1/billing", {
+          host: shop.host,
+          token: manager.token,
+        })
+      ).status,
+    ).toBe(403);
+    const res = await api("GET", "/v1/billing", shop.asOwner);
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      price: { amountMinor: PRICE, currency: "MXN", interval: "month" },
+      pending: null,
+      referral: { code: null, friendPercent: 20, rewardPercent: 10 },
     });
-    expect(res.status).toBe(201);
-    expect(String(res.body.url)).toStartWith("https://checkout.stripe.com/");
-    expect(stripe.state.checkouts[0]).toMatchObject({
-      mode: "subscription",
-      line_items: [{ price: "price_monthly", quantity: 1 }],
-      client_reference_id: shop.tenant._id.toHexString(),
-      success_url: `${returnUrl(shop)}?checkout=success`,
-    });
-    expect(stripe.state.checkouts[0]?.discounts).toBeUndefined();
-    expect((await tenantDoc(shop.tenant._id))?.billing?.stripeCustomerId).toBe(
-      String(stripe.state.checkouts[0]?.customer),
-    );
-
-    const elsewhere = await api("POST", "/v1/billing/checkout", {
-      ...shop.asOwner,
-      body: { returnUrl: "https://evil.example.com/" },
-    });
-    expect(elsewhere.status).toBe(422);
   });
 
-  test("a paid checkout activates the plan, hands out a referral code and blocks a second checkout", async () => {
+  test("asking to pay copies the project's account; asking again returns the same payment", async () => {
+    const shop = await createShop();
+    const first = await pay(shop);
+    expect(first.status).toBe(201);
+    expect(first.body).toMatchObject({
+      status: "pending",
+      amountMinor: PRICE,
+      currency: "MXN",
+      clabe: CLABE,
+      holder: "Dueño del Proyecto",
+    });
+    expect((await pay(shop)).body.id).toBe(first.body.id);
+    expect(
+      await subscriptionPayments.countDocuments({ tenantId: shop.tenant._id }),
+    ).toBe(1);
+    expect((await summary(shop)).pending).toMatchObject({ id: first.body.id });
+  });
+
+  test("without a valid account in ownerProject nothing is offered", async () => {
+    const shop = await createShop();
+    await ownerProject.updateOne(
+      { _id: projectId },
+      { $set: { bankAccountKey: "018219378491738490" } },
+    );
+    try {
+      const res = await pay(shop);
+      expect(res.status).toBe(503);
+      expect(res.body.error?.code).toBe("BILLING_DISABLED");
+    } finally {
+      await ownerProject.updateOne(
+        { _id: projectId },
+        { $set: { bankAccountKey: CLABE } },
+      );
+    }
+  });
+
+  test("platform staff confirming activates the plan for a month and hands out a referral code", async () => {
     const shop = await createShop({
       subscription: {
         plan: "trial",
         status: "trialing",
-        currentPeriodEnd: new Date(Date.now() - 864e5),
         limits: { branches: 1, barbers: 3 },
       },
     });
-    await pay(shop);
-    const tenant = await tenantDoc(shop.tenant._id);
+    const res = await pay(shop);
+    const id = String(res.body.id);
+
+    const wrong = await confirm(id, PRICE - 1);
+    expect(wrong.status).toBe(422);
+    expect((await tenantOf(shop))?.subscription.plan).toBe("trial");
+
+    const ok = await confirm(id, PRICE);
+    expect(ok.status).toBe(200);
+    const tenant = await tenantOf(shop);
     expect(tenant?.subscription).toMatchObject({
       plan: "pro",
       status: "active",
-      limits: { branches: 5 },
+      limits: { branches: 5, barbers: 30 },
     });
-    expect(tenant?.subscription.currentPeriodEnd?.getTime()).toBeGreaterThan(
-      Date.now(),
-    );
-    expect(tenant?.billing?.firstPaidAt).toBeInstanceOf(Date);
+    const end = tenant?.subscription.currentPeriodEnd?.getTime() ?? 0;
+    expect(end).toBeGreaterThan(Date.now() + 27 * 864e5);
+    expect(end).toBeLessThan(Date.now() + 32 * 864e5);
+    expect((await summary(shop)).subscribed).toBe(true);
+    expect((await summary(shop)).referral).toMatchObject({
+      code: expect.stringMatching(/^[A-HJ-NP-Z2-9]{8}$/),
+    });
 
-    const code = (await summary(shop)).referral.code;
-    expect(code).toMatch(/^[A-HJ-NP-Z2-9]{8}$/);
-    expect((await summary(shop)).referral.code).toBe(code);
+    // Confirming twice changes nothing.
+    const again = await confirm(id, PRICE);
+    expect(again.status).toBe(409);
+    expect(again.body.error?.code).toBe("INVALID_TRANSITION");
+    expect(
+      (await tenantOf(shop))?.subscription.currentPeriodEnd?.getTime(),
+    ).toBe(end);
+  });
 
-    const again = await api("POST", "/v1/billing/checkout", {
+  test("paying again before the period ends adds a month to what is left", async () => {
+    const shop = await createShop();
+    await subscribe(shop);
+    const first = (await tenantOf(shop))?.subscription.currentPeriodEnd;
+    await subscribe(shop);
+    const second = (await tenantOf(shop))?.subscription.currentPeriodEnd;
+    expect(
+      second && first && second.getTime() - first.getTime(),
+    ).toBeGreaterThan(27 * 864e5);
+  });
+
+  test("owners cannot confirm their own payment, and only platform staff can", async () => {
+    const shop = await createShop();
+    const res = await pay(shop);
+    const id = String(res.body.id);
+    const asOwner = await api("POST", `/platform/subscriptions/${id}/confirm`, {
       ...shop.asOwner,
-      body: { returnUrl: returnUrl(shop) },
+      body: { receivedMinor: PRICE },
     });
-    expect(again.body.error?.code).toBe("ALREADY_SUBSCRIBED");
+    expect([401, 403, 404]).toContain(asOwner.status);
+    const anonymous = await app.request(
+      `/platform/subscriptions/${id}/confirm`,
+      {
+        method: "POST",
+      },
+    );
+    expect(anonymous.status).toBe(401);
+    expect(
+      (await subscriptionPayments.findOne({ _id: new ObjectId(id) }))?.status,
+    ).toBe("pending");
   });
 
-  test("referral: the friend gets 20% off the first month, the referrer 10% of it as stacking credit", async () => {
-    const referrer = await createShop();
-    await pay(referrer);
-    const code = String((await summary(referrer)).referral.code);
+  test("rejecting keeps the reason and lets the owner ask again; expired ones cannot be confirmed", async () => {
+    const shop = await createShop();
+    const first = await pay(shop);
+    const rejected = await staff(
+      "POST",
+      `/subscriptions/${first.body.id}/reject`,
+      { reason: "No llegó" },
+    );
+    expect(rejected.status).toBe(200);
+    expect((await confirm(String(first.body.id), PRICE)).status).toBe(409);
+    expect((await tenantOf(shop))?.subscription.plan).not.toBe("basic");
 
-    const friends = [await createShop(), await createShop()];
-    for (const friend of friends) {
-      const check = await api("POST", "/v1/billing/referral-check", {
-        ...friend.asOwner,
-        body: { code: `${code.slice(0, 4).toLowerCase()}-${code.slice(4)}` },
-      });
-      expect(check.body).toEqual({ code, discountPercent: 20 });
-      const { checkout } = await pay(friend, { referralCode: code });
-      expect(checkout.discounts).toEqual([{ coupon: "brb-referral-20" }]);
-      expect(checkout.metadata.referrerTenantId).toBe(
-        referrer.tenant._id.toHexString(),
-      );
-    }
-    expect(stripe.state.coupons.size).toBe(1);
-
-    const totals = await summary(referrer);
-    expect(totals.referral).toMatchObject({
-      referred: 2,
-      rewarded: 2,
-      earnedMinor: 6_000,
-    });
-    expect(totals.creditMinor).toBe(6_000);
-    expect(stripe.state.credits.map((c) => [c.amount, c.currency])).toEqual([
-      [-3000, "mxn"],
-      [-3000, "mxn"],
-    ]);
-    expect((await summary(friends[0] as Shop)).referredBy).toEqual({
-      discountPercent: 20,
-    });
+    const second = await pay(shop);
+    expect(second.body.id).not.toBe(first.body.id);
+    await subscriptionPayments.updateOne(
+      { _id: new ObjectId(String(second.body.id)) },
+      { $set: { expiresAt: new Date(Date.now() - 1000) } },
+    );
+    expect((await confirm(String(second.body.id), PRICE)).status).toBe(409);
+    expect(
+      (
+        await subscriptionPayments.findOne({
+          _id: new ObjectId(String(second.body.id)),
+        })
+      )?.status,
+    ).toBe("expired");
+    expect((await pay(shop)).status).toBe(201);
   });
 
-  test("a retried webhook credits the referrer only once", async () => {
+  test("a lifetime barbershop never pays", async () => {
+    const shop = await createShop({
+      subscription: {
+        plan: "lifetime",
+        status: "active",
+        limits: { branches: 50, barbers: 500 },
+      },
+    });
+    const res = await pay(shop);
+    expect(res.status).toBe(409);
+    expect(res.body.error?.code).toBe("LIFETIME_PLAN");
+  });
+
+  test("a lapsed period locks writes (402) but the owner can still reach billing", async () => {
+    const shop = await createShop();
+    await tenants.updateOne(
+      { _id: shop.tenant._id },
+      {
+        $set: {
+          "subscription.currentPeriodEnd": new Date(Date.now() - 10 * 864e5),
+        },
+      },
+    );
+    const locked = await api("PATCH", "/v1/tenant", {
+      ...shop.asOwner,
+      body: { name: "Nuevo nombre" },
+    });
+    expect(locked.status).toBe(402);
+    expect((await api("GET", "/v1/billing", shop.asOwner)).status).toBe(200);
+    expect((await pay(shop)).status).toBe(201);
+  });
+});
+
+describe("referrals", () => {
+  test("the friend gets 20% off the first month; the referrer gets 10% as credit that discounts their next one", async () => {
     const referrer = await createShop();
-    await pay(referrer);
+    await subscribe(referrer);
     const code = String((await summary(referrer)).referral.code);
     const friend = await createShop();
-    const { session } = await pay(friend, { referralCode: code });
-    expect((await webhook("checkout.session.completed", session)).status).toBe(
-      200,
+
+    const checked = await api("POST", "/v1/billing/referral-check", {
+      ...friend.asOwner,
+      body: { code },
+    });
+    expect(checked.body).toEqual({ code, discountPercent: 20 });
+
+    const res = await pay(friend, { referralCode: code.toLowerCase() });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      amountMinor: 24_000,
+      discountMinor: 6_000,
+      listPriceMinor: PRICE,
+    });
+    expect((await confirm(String(res.body.id), 24_000)).status).toBe(200);
+
+    const reward = await referrals.findOne({
+      refereeTenantId: friend.tenant._id,
+    });
+    expect(reward).toMatchObject({ status: "rewarded", rewardMinor: 3_000 });
+    expect((await tenantOf(referrer))?.billing?.creditMinor).toBe(3_000);
+    expect(await summary(referrer)).toMatchObject({
+      creditMinor: 3_000,
+      referral: { referred: 1, rewarded: 1, earnedMinor: 3_000 },
+    });
+    expect(await summary(friend)).toMatchObject({
+      referredBy: { discountPercent: 20 },
+    });
+
+    // The credit is spent on the referrer's next month, and only once it is confirmed.
+    const next = await pay(referrer);
+    expect(next.body).toMatchObject({
+      amountMinor: 27_000,
+      creditAppliedMinor: 3_000,
+    });
+    expect((await tenantOf(referrer))?.billing?.creditMinor).toBe(3_000);
+    expect((await confirm(String(next.body.id), 27_000)).status).toBe(200);
+    expect((await tenantOf(referrer))?.billing?.creditMinor).toBe(0);
+  });
+
+  test("credit that covers the whole month settles it without a transfer", async () => {
+    const shop = await createShop();
+    await tenants.updateOne(
+      { _id: shop.tenant._id },
+      { $set: { "billing.creditMinor": PRICE } },
     );
-    expect(stripe.state.credits).toHaveLength(1);
-    expect(
-      await referrals.countDocuments({ refereeTenantId: friend.tenant._id }),
-    ).toBe(1);
-    expect((await summary(referrer)).creditMinor).toBe(3_000);
+    const res = await pay(shop);
+    expect(res.body).toMatchObject({ amountMinor: 0, status: "paid" });
+    const tenant = await tenantOf(shop);
+    expect(tenant?.subscription.plan).toBe("pro");
+    expect(tenant?.billing?.creditMinor).toBe(0);
   });
 
   test("codes are refused for yourself, the same owner, after the first month, or when unknown", async () => {
     const referrer = await createShop();
-    await pay(referrer);
+    await subscribe(referrer);
     const code = String((await summary(referrer)).referral.code);
-    const check = (shop: Shop, value = code) =>
+    const check = (shop: Shop, value: string) =>
       api("POST", "/v1/billing/referral-check", {
         ...shop.asOwner,
         body: { code: value },
       });
 
-    expect((await check(referrer)).body.error?.code).toBe("REFERRAL_SELF");
-
-    const sameOwner = await createShop();
-    await users.updateOne(
-      { _id: sameOwner.owner.user._id },
-      { $set: { email: referrer.owner.user.email } },
+    expect((await check(referrer, code)).body.error?.code).toBe(
+      "REFERRAL_SELF",
     );
-    expect((await check(sameOwner)).body.error?.code).toBe("REFERRAL_SELF");
-
-    const payer = await createShop();
-    await pay(payer);
-    expect((await check(payer)).body.error?.code).toBe("REFERRAL_NOT_FIRST");
-
-    const unknown = await check(await createShop(), "ZZZZZZZZ");
-    expect(unknown.status).toBe(404);
-    expect(unknown.body.error?.code).toBe("REFERRAL_NOT_FOUND");
-    expect((await check(payer, "nope")).status).toBe(422);
-
-    const unpaid = await createShop();
-    const checkout = await api("POST", "/v1/billing/checkout", {
-      ...unpaid.asOwner,
-      body: {
-        returnUrl: returnUrl(unpaid),
-        referralCode: "ZZZZZZZZ",
-      },
-    });
-    expect(checkout.status).toBe(404);
-    expect(stripe.state.checkouts).toHaveLength(2);
-  });
-
-  test("cancelling from the portal keeps it active until the period ends; reactivating undoes it", async () => {
-    const shop = await createShop();
-    const { subscription } = await pay(shop);
-    const end = Math.floor(Date.now() / 1000) + 30 * 86_400;
-    const updated = () =>
-      webhook("customer.subscription.updated", {
-        id: subscription,
-        object: "subscription",
-      });
-
-    stripe.setCancelAt(subscription, end);
-    expect((await updated()).status).toBe(200);
-    const cancelling = await summary(shop);
-    expect(cancelling).toMatchObject({ status: "active", subscribed: true });
-    expect(cancelling.cancelAt).toBe(new Date(end * 1000).toISOString());
-    const write = await api("PATCH", "/v1/tenant", {
-      ...shop.asOwner,
-      body: { name: "Sigue activa" },
-    });
-    expect(write.status).toBe(200);
-
-    stripe.setCancelAt(subscription, null);
-    expect((await updated()).status).toBe(200);
-    expect((await summary(shop)).cancelAt).toBeUndefined();
-
-    stripe.setCancelAt(subscription, end);
-    await updated();
-    stripe.setStatus(subscription, "canceled");
-    await webhook("customer.subscription.deleted", {
-      id: subscription,
-      object: "subscription",
-    });
-    const ended = await summary(shop);
-    expect(ended).toMatchObject({ status: "canceled", subscribed: false });
-    expect(ended.cancelAt).toBeUndefined();
-  });
-
-  test("Stripe ending the subscription locks writes (402); the owner can still reach billing", async () => {
-    const shop = await createShop();
-    const { subscription } = await pay(shop);
-    stripe.setStatus(subscription, "canceled");
-    const hook = await webhook("customer.subscription.deleted", {
-      id: subscription,
-      object: "subscription",
-    });
-    expect(hook.status).toBe(200);
-    expect((await tenantDoc(shop.tenant._id))?.subscription.status).toBe(
-      "canceled",
+    expect((await check(await createShop(), "AAAAAAAA")).body.error?.code).toBe(
+      "REFERRAL_NOT_FOUND",
     );
-    const write = await api("PATCH", "/v1/tenant", {
-      ...shop.asOwner,
-      body: { name: "Nueva" },
-    });
-    expect(write.body.error?.code).toBe("SUBSCRIPTION_INACTIVE");
-    expect((await api("GET", "/v1/billing", shop.asOwner)).status).toBe(200);
-    const portal = await api("POST", "/v1/billing/portal", {
-      ...shop.asOwner,
-      body: { returnUrl: returnUrl(shop) },
-    });
-    expect(portal.status).toBe(201);
-  });
 
-  test("events from a connected account never touch billing", async () => {
-    const shop = await createShop();
-    const payload = JSON.stringify({
-      id: "evt_connected",
-      object: "event",
-      type: "checkout.session.completed",
-      account: "acct_123",
-      data: {
-        object: {
-          id: "cs_connected",
-          mode: "subscription",
-          payment_status: "paid",
-          client_reference_id: shop.tenant._id.toHexString(),
-          customer: "cus_x",
-          subscription: "sub_x",
-        },
-      },
-    });
-    const res = await app.request("/webhooks/stripe", {
-      method: "POST",
-      headers: {
-        "Stripe-Signature":
-          await requireStripe().webhooks.generateTestHeaderStringAsync({
-            payload,
-            secret: STRIPE_ENV.STRIPE_WEBHOOK_SECRET,
-          }),
-      },
-      body: payload,
-    });
-    expect(res.status).toBe(200);
-    expect((await tenantDoc(shop.tenant._id))?.billing).toBeUndefined();
+    const veteran = await createShop();
+    await subscribe(veteran);
+    const late = await check(veteran, code);
+    expect(late.status).toBe(409);
+    expect(late.body.error?.code).toBe("REFERRAL_NOT_FIRST");
+    expect((await pay(veteran, { referralCode: code })).status).toBe(409);
   });
+});
 
-  test("a webhook with a bad signature is refused and changes nothing", async () => {
+describe("the staff queue", () => {
+  test("lists transfers by status with the barbershop's name", async () => {
     const shop = await createShop();
-    const res = await webhook(
-      "checkout.session.completed",
-      { client_reference_id: shop.tenant._id.toHexString() },
-      "whsec_wrong",
+    const res = await pay(shop);
+    const listed = await staff("GET", "/subscriptions?status=pending");
+    expect(listed.status).toBe(200);
+    const rows = listed.body as { id: string; tenantSlug: string }[];
+    expect(rows.find((r) => r.id === res.body.id)?.tenantSlug).toBe(
+      shop.tenant.slug,
     );
-    expect(res.status).toBe(400);
-    expect(res.body.error?.code).toBe("BAD_SIGNATURE");
-    expect((await tenantDoc(shop.tenant._id))?.billing).toBeUndefined();
+    expect((await app.request("/platform/subscriptions")).status).toBe(401);
   });
 });

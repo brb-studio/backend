@@ -10,6 +10,12 @@ import {
   parseId,
   readJson,
 } from "../../shared/http";
+import { confirmBody, listQuery, rejectBody } from "../billing/schemas";
+import {
+  confirmPayment,
+  listPayments,
+  rejectPayment,
+} from "../billing/service";
 import {
   bearerOf,
   getStaff,
@@ -71,6 +77,28 @@ export const platformRoutes = new Hono<Env>()
     await platformLogout(bearerOf(c.req.header("Authorization")) ?? "");
     return c.body(null, 204);
   })
+  .get("/subscriptions", async (c) => {
+    const { status } = parse(listQuery, c.req.query());
+    return c.json(await listPayments(status));
+  })
+  .post("/subscriptions/:id/confirm", async (c) =>
+    c.json(
+      await confirmPayment(
+        staffId(c),
+        parseId(c.req.param("id")),
+        await readJson(c, confirmBody),
+      ),
+    ),
+  )
+  .post("/subscriptions/:id/reject", async (c) =>
+    c.json(
+      await rejectPayment(
+        staffId(c),
+        parseId(c.req.param("id")),
+        await readJson(c, rejectBody),
+      ),
+    ),
+  )
   .get("/options", async (c) =>
     c.json(await options(parse(optionsQuery, c.req.query()))),
   )

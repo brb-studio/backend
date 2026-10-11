@@ -21,7 +21,8 @@ describe("parseConfig", () => {
       MONGO_DB: "brb-studio",
       PLATFORM_DOMAIN: "localhost",
       CORS_ORIGINS: "",
-      STRIPE_APP_FEE_BPS: 0,
+      SUBSCRIPTION_PRICE_MINOR: 30_000,
+      SUBSCRIPTION_CURRENCY: "MXN",
     });
   });
 
@@ -60,11 +61,15 @@ describe("parseConfig", () => {
         NODE_ENV: "production",
         MONGO_URL: url,
         PROXY_SECRET: secret,
+        PAYMENT_TOKEN_SECRET: secret,
       }).MONGO_URL,
     ).toBe(url);
     expect(errorOf({ NODE_ENV: "production", MONGO_URL: url })).toContain(
       "PROXY_SECRET: required in production",
     );
+    expect(
+      errorOf({ NODE_ENV: "production", MONGO_URL: url, PROXY_SECRET: secret }),
+    ).toContain("PAYMENT_TOKEN_SECRET: required in production");
   });
 
   test("tests can only use a *_test database", () => {

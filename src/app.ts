@@ -30,10 +30,8 @@ import {
 import { imageRoutes, publicImageRoutes } from "./features/images/routes";
 import { notificationRoutes } from "./features/notifications/routes";
 import {
-  stripeConnectRoutes,
-  stripePublicRoutes,
-  stripeStaffRoutes,
-  stripeWebhookRoutes,
+  paymentPublicRoutes,
+  paymentStaffRoutes,
 } from "./features/payments/routes";
 import { platformRoutes } from "./features/platform/routes";
 import { earningsRoutes } from "./features/platform/tenant-routes";
@@ -114,7 +112,6 @@ export const app = new Hono<Env>()
     return c.json({ status: "ok" });
   })
   .route("/images", publicImageRoutes)
-  .route("/webhooks/stripe", stripeWebhookRoutes)
   .route("/platform", platformRoutes)
   .use("/v1/*", resolveTenant, authenticate)
   .route("/v1/auth", authRoutes)
@@ -123,9 +120,8 @@ export const app = new Hono<Env>()
   .route("/v1/public/barbers", publicBarberRoutes)
   .route("/v1/public/catalog", publicCatalogRoutes)
   .route("/v1/public/availability", publicAvailabilityRoutes)
-  .route("/v1/public", stripePublicRoutes)
-  .route("/v1/stripe", stripeConnectRoutes)
-  .route("/v1/payments", stripeStaffRoutes)
+  .route("/v1/public", paymentPublicRoutes)
+  .route("/v1/payments", paymentStaffRoutes)
   .route("/v1/me", meRoutes)
   .route("/v1/tenant", tenantRoutes)
   .route("/v1/billing", billingRoutes)

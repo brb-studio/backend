@@ -1,77 +1,54 @@
 import { Hono } from "hono";
-import type Stripe from "stripe";
 import { config } from "../../config";
 import { hit } from "../../db/rate-limit";
+import { forTenant } from "../../db/scoped";
 import {
   AppError,
   clientIp,
   type Env,
+  parse,
   parseId,
   readJson,
 } from "../../shared/http";
-import { STAFF } from "../auth/policy";
-import { requireRole } from "../auth/routes";
-import { handleBillingEvent } from "../billing/service";
+import { authOf, requireRole } from "../auth/routes";
+import { findCustomer } from "../booking/customers";
 import { requireActiveSubscription } from "../tenancy/subscription";
-import { paymentIntentBody } from "./schemas";
 import {
-  connectStatus,
-  createOnboardingLink,
-  createPaymentIntent,
-  handleStripeEvent,
-  handleThinNotification,
-  refundAppointment,
+  bankSettings,
+  confirmBody,
+  listQuery,
+  rejectBody,
+  transferBody,
+} from "./schemas";
+import {
+  bankSettingsOf,
+  confirmPayment,
+  createTransfer,
+  listPayments,
+  rejectPayment,
+  saveBankSettings,
 } from "./service";
-import { paymentsEnabled, requireStripe, validPaymentToken } from "./stripe";
+import { validPaymentToken } from "./token";
 
-export const stripeConnectRoutes = new Hono<Env>()
-  .use(requireRole(...STAFF))
-  .get("/status", async (c) => {
-    if (!paymentsEnabled()) {
-      return c.json({ connected: false, accountId: null });
-    }
-    return c.json(await connectStatus(c.var.tenant));
-  })
-  .post(
-    "/connect",
-    requireRole("owner", "admin"),
-    requireActiveSubscription,
-    async (c) => c.json(await createOnboardingLink(c.var.tenant), 201),
-  );
-
-export const stripeStaffRoutes = new Hono<Env>()
-  .use(requireRole("owner", "admin", "manager"))
-  .post("/:id/refund", requireActiveSubscription, async (c) =>
-    c.json(await refundAppointment(c.var.tenant, parseId(c.req.param("id")))),
-  );
-
-export const stripePublicRoutes = new Hono<Env>().post(
-  "/payments/intent",
+export const paymentPublicRoutes = new Hono<Env>().post(
+  "/payments/transfer",
   requireActiveSubscription,
   async (c) => {
-    if (!paymentsEnabled()) {
-      throw new AppError(
-        503,
-        "PAYMENTS_DISABLED",
-        "Online payments are not enabled",
-      );
-    }
     const ip = clientIp(c, config.PROXY_SECRET);
     if (!(await hit(`pay:${c.var.tenant._id}:${ip}`, 30, 10 * 60 * 1000))) {
       throw new AppError(429, "RATE_LIMITED", "Too many attempts");
     }
-    const { appointmentId, paymentToken } = await readJson(
-      c,
-      paymentIntentBody,
-    );
+    const { appointmentId, paymentToken } = await readJson(c, transferBody);
     const auth = c.var.auth;
     // Guests prove they booked it with the token from the booking response; an id alone is guessable.
     if (!auth && !validPaymentToken(appointmentId, paymentToken)) {
       throw new AppError(404, "NOT_FOUND", "Not found");
     }
-    if (auth && auth.role === "customer") {
-      const { findCustomer } = await import("../booking/customers");
-      const { forTenant } = await import("../../db/scoped");
+    if (auth) {
+      // Signed-in users: customers only their own appointments; staff cannot pay on a customer's behalf.
+      if (auth.role !== "customer") {
+        throw new AppError(403, "FORBIDDEN", "Not allowed");
+      }
       const t = forTenant(c.var.tenant._id);
       const [customer, appointment] = await Promise.all([
         findCustomer(t, { userId: auth.userId }),
@@ -85,51 +62,42 @@ export const stripePublicRoutes = new Hono<Env>().post(
         throw new AppError(404, "NOT_FOUND", "Not found");
       }
     }
-    return c.json(await createPaymentIntent(c.var.tenant, appointmentId), 201);
+    return c.json(await createTransfer(c.var.tenant, appointmentId), 201);
   },
 );
 
-export const stripeWebhookRoutes = new Hono<Env>().post("/", async (c) => {
-  if (!config.STRIPE_WEBHOOK_SECRET) {
-    throw new AppError(503, "PAYMENTS_DISABLED", "Webhooks are not configured");
-  }
-  const signature = c.req.header("stripe-signature");
-  if (!signature) {
-    throw new AppError(400, "BAD_SIGNATURE", "Missing Stripe signature");
-  }
-  const payload = await c.req.text();
-  const stripe = requireStripe();
-  let event: Stripe.Event | undefined;
-  try {
-    event = await stripe.webhooks.constructEventAsync(
-      payload,
-      signature,
-      config.STRIPE_WEBHOOK_SECRET,
+/** The barbershop's money: only owner and admin see bank details and confirm what arrived. */
+export const paymentStaffRoutes = new Hono<Env>()
+  .use(requireRole("owner", "admin"))
+  .get("/settings", (c) => c.json(bankSettingsOf(c.var.tenant)))
+  .patch("/settings", requireActiveSubscription, async (c) =>
+    c.json(
+      await saveBankSettings(c.var.tenant, await readJson(c, bankSettings)),
+    ),
+  )
+  .get("/", async (c) => {
+    const { status } = parse(listQuery, c.req.query());
+    return c.json(await listPayments(c.var.tenant, status));
+  })
+  .post("/:id/confirm", requireActiveSubscription, async (c) => {
+    const input = await readJson(c, confirmBody);
+    return c.json(
+      await confirmPayment(
+        c.var.tenant,
+        authOf(c).userId,
+        parseId(c.req.param("id")),
+        input,
+      ),
     );
-  } catch {
-    // Not a v1 event: connected accounts speak thin events (v2).
-  }
-  if (event) {
-    // Outside the try: a failing handler answers 500 (Stripe retries), not "bad signature".
-    await handleStripeEvent(event);
-    await handleBillingEvent(event);
-    return c.json({ received: true });
-  }
-  try {
-    const notification = await stripe.parseEventNotificationAsync(
-      payload,
-      signature,
-      config.STRIPE_WEBHOOK_SECRET,
+  })
+  .post("/:id/reject", requireActiveSubscription, async (c) => {
+    const input = await readJson(c, rejectBody);
+    return c.json(
+      await rejectPayment(
+        c.var.tenant,
+        authOf(c).userId,
+        parseId(c.req.param("id")),
+        input,
+      ),
     );
-    const related =
-      "related_object" in notification &&
-      notification.related_object &&
-      "id" in notification.related_object
-        ? (notification.related_object.id as string)
-        : undefined;
-    await handleThinNotification(notification.type, related);
-    return c.json({ received: true });
-  } catch {
-    throw new AppError(400, "BAD_SIGNATURE", "Invalid Stripe signature");
-  }
-});
+  });

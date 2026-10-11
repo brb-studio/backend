@@ -4,8 +4,8 @@ import type { Plan, TenantDoc } from "../../db/scoped";
 export const REFERRAL = { friendPercent: 20, rewardPercent: 10 } as const;
 
 /**
- * One subscription for everyone (300 MXN/month, the price lives in Stripe). Paying puts the tenant on
- * this plan and its limits.
+ * One subscription for everyone (SUBSCRIPTION_PRICE_MINOR a month, paid by SPEI transfer). Paying puts the
+ * tenant on this plan and its limits.
  */
 export const SUBSCRIPTION_PLAN = "pro" satisfies Plan;
 
@@ -26,28 +26,21 @@ export const normalizeCode = (raw: string) =>
 export const rewardFor = (subtotalMinor: number) =>
   Math.round((subtotalMinor * REFERRAL.rewardPercent) / 100);
 
-type Status = TenantDoc["subscription"]["status"];
-
-/** Stripe subscription status → ours. `null`: not settled yet (first payment pending), change nothing. */
-export function toStatus(stripe: string): Status | null {
-  switch (stripe) {
-    case "active":
-      return "active";
-    case "trialing":
-      return "trialing";
-    case "past_due":
-    case "unpaid":
-    case "paused":
-      return "past_due";
-    case "canceled":
-    case "incomplete_expired":
-      return "canceled";
-    default:
-      return null;
-  }
+/** Months paid are added to whatever is left of the current period, so paying early never wastes days. */
+export function periodEnd(current: Date | undefined, now: Date) {
+  const start = current && current > now ? current : now;
+  const end = Temporal.Instant.fromEpochMilliseconds(start.getTime())
+    .toZonedDateTimeISO("UTC")
+    .add({ months: 1 });
+  return new Date(end.epochMilliseconds);
 }
 
-/** A Stripe subscription that still bills: a new checkout would charge twice. */
-export const hasLiveSubscription = (tenant: TenantDoc) =>
-  Boolean(tenant.billing?.stripeSubscriptionId) &&
-  tenant.subscription.status !== "canceled";
+/** Paid up: a plan that is not the trial, with a period that has not ended. */
+export const isPaidUp = (tenant: TenantDoc, now: Date) => {
+  const end = tenant.subscription.currentPeriodEnd;
+  return (
+    tenant.subscription.plan !== "trial" &&
+    tenant.subscription.status !== "canceled" &&
+    Boolean(end && end > now)
+  );
+};

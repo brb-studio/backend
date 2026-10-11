@@ -25,7 +25,7 @@ El sistema SHALL identificar el tenant únicamente a partir del host de la petic
 - **THEN** la respuesta es 422 `VALIDATION` y no se procesa nada
 
 ### Requirement: Vista pública de la barbería
-El sistema SHALL exponer en `GET /v1/public/tenant`, sin sesión: nombre, moneda, idiomas, idioma por defecto, tema, marca, sucursales activas ordenadas por nombre e indicador `payments.online` (cobros en línea habilitados). El sistema MUST NOT exponer en esta vista la suscripción, los identificadores de Stripe ni datos internos.
+El sistema SHALL exponer en `GET /v1/public/tenant`, sin sesión: nombre, moneda, idiomas, idioma por defecto, tema, marca, sucursales activas ordenadas por nombre e indicador `payments.transfer` (transferencias habilitadas). El sistema MUST NOT exponer en esta vista la suscripción, los identificadores de Stripe ni datos internos.
 
 #### Scenario: Visitante sin sesión
 - **WHEN** un visitante pide la barbería pública
@@ -62,10 +62,10 @@ El horario semanal MUST usar `HH:MM` con apertura menor que cierre, tener como m
 - **THEN** la respuesta es 422 `VALIDATION`
 
 ### Requirement: Planes y límites
-Cada barbería SHALL tener un plan con límites de sucursales y barberos activos: `trial` 1/3, `basic` 1/5, `pro` 5/30, `lifetime` 50/500. La empresa que compró la app MUST estar en `lifetime`: nunca paga suscripción y ningún evento de facturación cambia su plan.
+Cada barbería SHALL tener un plan con límites de sucursales y barberos activos: `trial` 1/3, `basic` 1/5, `pro` 5/30, `lifetime` 50/500. La empresa que compró la app MUST estar en `lifetime`: nunca paga suscripción y ningún pago de suscripción cambia su plan.
 
 #### Scenario: Plan lifetime
-- **WHEN** llega un evento de suscripción de Stripe para una barbería `lifetime`
+- **WHEN** se pide pagar la suscripción de una barbería `lifetime`
 - **THEN** su plan, su estado y sus límites no cambian
 
 ### Requirement: Una suscripción inactiva bloquea escrituras

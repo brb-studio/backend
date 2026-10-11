@@ -1,58 +1,43 @@
 # subscription-billing Specification
 
 ## Purpose
-La barbería le paga a la plataforma su suscripción mensual (Stripe Billing, en la cuenta de la plataforma) y puede invitar a otras barberías con un código de referido. Código: `src/features/billing/` (reglas puras en `rules.ts`).
+La barbería le paga a la plataforma su suscripción mensual por transferencia SPEI a la cuenta del dueño del proyecto, y puede invitar a otras barberías con un código de referido. Stripe ya no interviene. Código: `src/features/billing/` (reglas puras en `rules.ts`) y la cola de confirmación en `src/features/platform/routes.ts`.
 
 ## Requirements
 
 ### Requirement: Una sola suscripción
-Existe un solo precio mensual, configurado en Stripe (`STRIPE_SUBSCRIPTION_PRICE`). Pagarlo SHALL poner a la barbería en el plan `pro` con sus límites. Solo el owner ve y gestiona la facturación. Sin precio configurado, la facturación responde 503 `BILLING_DISABLED`.
+Existe un solo precio mensual (`SUBSCRIPTION_PRICE_MINOR`, por defecto 30000 = 300.00, en `SUBSCRIPTION_CURRENCY`, por defecto MXN). Confirmar un pago SHALL poner a la barbería en el plan `pro` con sus límites y un mes más de periodo; si aún le quedaba periodo, el mes se suma a lo que quedaba. No hay cobro automático: cada mes el owner pide y transfiere otro pago. Solo el owner ve y gestiona la facturación.
 
 #### Scenario: Admin intenta ver la facturación
 - **WHEN** un admin pide `GET /v1/billing`
 - **THEN** la respuesta es 403 `FORBIDDEN`
 
-### Requirement: Contratar y administrar
-El owner SHALL iniciar el pago en Stripe Checkout y administrar su suscripción en el portal de Stripe. La URL de regreso MUST pertenecer al sitio de esa misma barbería (en producción, https); si no, 422 `VALIDATION`. Así el pago no puede usarse para redirigir a otro sitio.
+### Requirement: Cuenta que recibe
+La cuenta receptora SHALL leerse de la colección `ownerProject` (documento `active` con `bankAccountKey`; `name` es el titular), que se edita a mano en la base. En cada pago, la CLABE MUST tener dígito verificador válido; si no hay cuenta válida, 503 `BILLING_DISABLED` y no se crea nada. La cuenta se copia al pago, así que editarla no altera pagos ya pedidos.
 
-#### Scenario: URL de regreso ajena
-- **WHEN** el owner envía `returnUrl: https://otro-sitio.com`
-- **THEN** la respuesta es 422 `VALIDATION`
+#### Scenario: CLABE del proyecto mal escrita
+- **WHEN** el owner pide pagar y `ownerProject.bankAccountKey` no pasa la validación
+- **THEN** la respuesta es 503 `BILLING_DISABLED`
 
-### Requirement: Cuándo no se puede contratar
-El sistema MUST rechazar estos casos:
-- Una barbería `lifetime` quiere pagar: 409 `LIFETIME_PLAN`.
-- La suscripción sigue cobrando: 409 `ALREADY_SUBSCRIBED`, para no cobrar dos veces.
-- Se abre el portal sin nada pagado: 409 `NO_BILLING_ACCOUNT`.
-- Hubo más de 10 intentos de checkout en una hora: 429 `RATE_LIMITED`.
+### Requirement: Pedir y confirmar el pago
+`POST /v1/billing/payment` con `{ referralCode? }` SHALL crear un pago `pending` con importe = precio de lista − descuento de referido (solo primer mes) − crédito disponible, todo calculado en el servidor; pedirlo otra vez mientras sigue pendiente devuelve el mismo. Vence a los 5 días (`expired`). Solo el staff de plataforma SHALL listar (`GET /platform/subscriptions?status=`), confirmar (`POST /platform/subscriptions/:id/confirm` con `receivedMinor` igual al importe y `reference?`; si no, 422 `AMOUNT_MISMATCH`) y rechazar (`.../reject`). Confirmar actualiza en una transacción el pago, el plan, el periodo, el crédito gastado y la recompensa de referido; confirmar de nuevo es 409 `INVALID_TRANSITION`. Si el crédito cubre todo el mes, el pago nace `paid` sin transferencia.
 
-#### Scenario: La empresa compradora intenta pagar
-- **WHEN** el owner de una barbería `lifetime` inicia el checkout
-- **THEN** la respuesta es 409 `LIFETIME_PLAN`
+Se rechaza con: 409 `LIFETIME_PLAN` (barbería `lifetime`), 429 `RATE_LIMITED` (más de 10 intentos por hora) y los errores de referido de abajo.
 
-### Requirement: Estado sincronizado desde Stripe
-Ante cada evento de suscripción, el sistema SHALL volver a leer la suscripción desde Stripe en lugar de confiar en el contenido del evento, y guardar su estado, el fin del periodo y la cancelación programada. Una suscripción vieja ya terminada MUST NOT sobrescribir a la que la reemplazó.
+#### Scenario: Confirmación por el staff
+- **WHEN** el staff confirma el importe exacto de un pago pendiente
+- **THEN** la barbería queda `pro` y `active` con un mes más y recibe su código de referido
 
-#### Scenario: Cancelación desde el portal
-- **WHEN** el owner cancela desde el portal y el periodo pagado termina el día 30
-- **THEN** la barbería sigue `active` hasta el día 30 y queda guardado `cancelAt`
+#### Scenario: El owner no puede confirmarse a sí mismo
+- **WHEN** un owner llama a una ruta de `/platform`
+- **THEN** no es staff de plataforma y la respuesta es 401, 403 o 404
 
-#### Scenario: Eventos fuera de orden
-- **WHEN** un evento viejo de una suscripción cancelada llega después de que la barbería contrató una nueva
-- **THEN** el estado de la suscripción nueva no cambia
+#### Scenario: Importe incorrecto
+- **WHEN** se confirma con un `receivedMinor` distinto al importe
+- **THEN** la respuesta es 422 `AMOUNT_MISMATCH` y nada cambia
 
-### Requirement: Traducción de estados de Stripe
-El estado de Stripe SHALL traducirse así:
-- `active` → `active`;
-- `trialing` → `trialing`;
-- `past_due`, `unpaid` o `paused` → `past_due`;
-- `canceled` o `incomplete_expired` → `canceled`.
-
-Cualquier otro estado (por ejemplo, el primer pago todavía pendiente) MUST NOT cambiar nada.
-
-#### Scenario: Pago atrasado
-- **WHEN** Stripe marca la suscripción como `unpaid`
-- **THEN** la barbería queda `past_due`
+### Requirement: Datos históricos de Stripe
+Los campos `billing.stripeCustomerId`, `billing.stripeSubscriptionId` y `billing.cancelAt`, y los referidos con `checkoutSessionId`, MUST conservarse sin cambios aunque nada los use. La recompensa de referidos antiguos que Stripe guardó como saldo no se migra.
 
 ### Requirement: Códigos de referido
 Una barbería que ya pagó al menos una vez SHALL tener un código de 8 símbolos sin `I`, `O`, `0` ni `1`, para que no se confundan al dictarlos o leerlos. Al escribirlo, se ignoran mayúsculas, espacios y guiones. La validación de códigos se limita a 20 intentos por hora.
@@ -73,8 +58,8 @@ Un código SHALL dar 20% de descuento en el primer mes pagado de la barbería in
 - **THEN** la respuesta es 409 `REFERRAL_NOT_FIRST`
 
 ### Requirement: Crédito para quien invita
-Cuando la barbería invitada paga su primer mes, la que invitó SHALL recibir un crédito del 10% del precio de lista de ese mes, que Stripe descuenta solo de sus próximas facturas. Los reintentos de webhook MUST NOT duplicarlo: hay un solo referido por barbería invitada y el crédito se crea con llave de idempotencia.
+Cuando plataforma confirma el primer mes pagado de la barbería invitada, la que invitó SHALL recibir un crédito del 10% del precio de lista de ese mes en `billing.creditMinor`, que se descuenta solo de sus próximos pagos (se acumula). El crédito MUST NOT duplicarse: confirmar es una transición única y hay un solo referido por barbería invitada (índice único).
 
-#### Scenario: Webhook repetido
-- **WHEN** Stripe envía dos veces el evento del primer pago de la barbería invitada
-- **THEN** la barbería que invitó recibe un solo crédito
+#### Scenario: Confirmación repetida
+- **WHEN** se confirma dos veces el primer pago de la barbería invitada
+- **THEN** la segunda respuesta es 409 `INVALID_TRANSITION` y la que invitó recibe un solo crédito

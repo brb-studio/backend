@@ -145,7 +145,7 @@ export async function updateBarber(
         ...((userId === null || fields.images) && {
           $unset: {
             ...(userId === null && { userId: "" }),
-            // A saved gallery replaces the single photo of older documents.
+
             ...(fields.images && { image: "" }),
           },
         }),

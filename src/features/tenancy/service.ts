@@ -11,6 +11,7 @@ import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { isTenantWide, visibleBranchIds } from "../auth/policy";
+import { transfersAvailable } from "../payments/service";
 import {
   type branchCreate,
   type branchUpdate,
@@ -158,7 +159,7 @@ export async function publicTenant(tenant: TenantDoc) {
     defaultLocale: tenant.defaultLocale,
     theme: tenant.theme ?? {},
     brand: tenant.brand,
-    payments: { online: tenant.stripe?.chargesEnabled === true },
+    payments: { transfer: transfersAvailable(tenant) },
     branches: branches.map(({ active: _, ...branch }) => toBranch(branch)),
   };
 }
@@ -173,13 +174,6 @@ export const toTenant = (tenant: TenantDoc) => ({
   theme: tenant.theme ?? {},
   brand: tenant.brand,
   subscription: tenant.subscription,
-  stripe: tenant.stripe
-    ? {
-        accountId: tenant.stripe.accountId,
-        chargesEnabled: tenant.stripe.chargesEnabled,
-        detailsSubmitted: tenant.stripe.detailsSubmitted,
-      }
-    : null,
 });
 
 export const toBranch = ({

@@ -15,14 +15,12 @@
     "tenant:create": "bun scripts/tenant-create.ts",
     "platform-staff:create": "bun scripts/platform-staff-create.ts",
     "seed": "bun scripts/seed.ts",
-    "vapid:keys": "bun scripts/vapid-keys.ts",
-    "stripe:listen": "stripe listen --forward-to 127.0.0.1:4000/webhooks/stripe --events checkout.session.completed,checkout.session.async_payment_succeeded,customer.subscription.created,customer.subscription.updated,customer.subscription.deleted,payment_intent.succeeded,payment_intent.payment_failed,payment_intent.canceled,charge.refunded,account.updated"
+    "vapid:keys": "bun scripts/vapid-keys.ts"
   },
   "trustedDependencies": [],
   "dependencies": {
     "hono": "4.13.9",
     "mongodb": "7.7.0",
-    "stripe": "23.0.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

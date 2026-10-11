@@ -16,6 +16,7 @@ export type * from "./collections";
 export {
   APPOINTMENT_STATUSES,
   LOCALES,
+  PAYMENT_STATUSES,
   PLANS,
   REFERRAL_STATUSES,
   ROLES,
@@ -76,6 +77,7 @@ export const forTenant = (tenantId: ObjectId) => ({
   notifications: scope(raw.notifications, tenantId),
   pushSubscriptions: scope(raw.pushSubscriptions, tenantId),
   images: scope(raw.images, tenantId),
+  payments: scope(raw.payments, tenantId),
 });
 
 export type TenantDb = ReturnType<typeof forTenant>;
@@ -93,6 +95,8 @@ export const platform = {
   staff: raw.platformStaff,
   staffSessions: raw.platformSessions,
   payouts: raw.payouts,
+  ownerProject: raw.ownerProject,
+  subscriptionPayments: raw.subscriptionPayments,
 };
 
 export async function runAll<T>(

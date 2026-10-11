@@ -19,8 +19,8 @@
 | `availability` | motor de slots libres, ventana de reserva, aviso mínimo, timezones por sucursal |
 | `booking` | reserva pública/staff/walk-in, snapshots, cancel/reschedule, anti-doble-reserva |
 | `promotions` | `percent`/`fixed`, códigos, `firstVisitOnly`, `maxRedemptions`, mejor descuento gana, `priceFor()` |
-| `appointment-payments` | cobro Connect, estados de pago, reembolsos |
-| `subscription-billing` | checkout/portal/webhooks Billing, plan `pro`/`lifetime`, referidos (20% amigo, 10% referidor como balance) |
+| `appointment-payments` | transferencia SPEI, confirmación manual, estados de pago |
+| `subscription-billing` | transferencia SPEI a `ownerProject`, confirmación por staff de plataforma, plan `pro`/`lifetime`, referidos (20% amigo, 10% referidor como crédito) |
 | `notifications` | notificación en la transacción de reserva, SSE (change stream), Web Push (VAPID, chunks de 20) |
 | `platform-dashboard` | summary/breakdown/appointments/options, comisión, payouts |
 | `platform-safety` | auth separada de platform staff, seguridad cross-tenant |
@@ -34,10 +34,10 @@
 4. **Anti-doble-reserva:** transacción que sube `lockVersion` del barbero (WriteConflict → retry) + re-chequeo con el mismo engine de disponibilidad + índice único parcial `{ barberId, startAt }` como backstop.
 5. **Catálogo computado:** el paquete guarda solo precio propio + ids ordenados (2–10, repeticiones OK). Duración y `listPriceMinor` se derivan de los servicios actuales.
 6. **Comisión congelada:** `commission = totalMinor × commissionBps / 10000` redondeo half-up, solo en `platform/commission.ts`. Sin tasa configurada = `unconfigured`, nunca se paga ni se adivina. La tasa se congela en la cita al completarse o pagarse (`commission: { bps, amountMinor }`).
-7. **Cuatro cifras separadas (platform):** `sales` (completed × `totalMinor`), `collected` (Stripe `paid`), `commission earned`, `paidOut`. Nunca sumar monedas distintas (un total por currency). `payoutId` en la cita evita joins.
+7. **Cuatro cifras separadas (platform):** `sales` (completed × `totalMinor`), `collected` (pago `paid`: SPEI confirmado o Stripe histórico), `commission earned`, `paidOut`. Nunca sumar monedas distintas (un total por currency). `payoutId` en la cita evita joins.
 8. **Payouts atómicos:** un payout liquida citas completas; índice único en `payouts.appointmentIds` hace imposible pagar una dos veces, aun concurrente.
 9. **Referidos idempotentes:** un referido una sola vez (índice único); el crédito lleva idempotency key para que un webhook reintentado no pague doble.
-10. **Suscripciones:** webhooks re-leen desde la API de Stripe y copian plan/estado/fin-de-periodo/límites al tenant. Rutas de billing saltan `requireActiveSubscription` (una tienda vencida debe poder pagar). Escrituras devuelven 402 `SUBSCRIPTION_INACTIVE` si la suscripción murió hace >7 días.
+10. **Suscripciones:** el owner pide un pago (`pending`, 5 días) y plataforma lo confirma a mano; confirmar fija plan `pro`, suma un mes y mueve crédito/recompensas en una transacción. Rutas de billing saltan `requireActiveSubscription` (una tienda vencida debe poder pagar).
 11. **Notificaciones garantizadas:** la notificación del barbero se escribe **dentro** de la transacción de reserva. Push se envía post-commit; 404/410 del push-service borra la suscripción; solo hosts push conocidos (anti-SSRF).
 
 ## Workflow de cambio de negocio (obligatorio)

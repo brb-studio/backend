@@ -499,7 +499,7 @@ describe("customer reschedule", () => {
     expect(late.body.error?.code).toBe("TOO_LATE");
   });
 
-  test("a paid visit keeps its payment when moved; without Stripe, cancelling keeps it paid", async () => {
+  test("a paid visit keeps its payment when moved; cancelling keeps a legacy Stripe payment paid", async () => {
     const shop = await bookingShop();
     const user = await createUser(shop.tenant, "customer", {
       phone: nextPhone(),

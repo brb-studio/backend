@@ -1,188 +1,121 @@
-import type { ObjectId } from "mongodb";
-import type Stripe from "stripe";
-import { config } from "../../config";
+import { ObjectId, type WithId } from "mongodb";
 import {
   type AppointmentDoc,
+  type CustomerDoc,
   forTenant,
+  type PaymentDoc,
+  type PaymentStatus,
   platform,
   type TenantDoc,
+  transaction,
 } from "../../db/scoped";
-import { AppError } from "../../shared/http";
-import { requireStripe } from "./stripe";
+import { collect, mapBy } from "../../shared/cursor";
+import { AppError, isDuplicate } from "../../shared/http";
 
-const notConnected = () =>
-  new AppError(
-    409,
-    "STRIPE_NOT_CONNECTED",
-    "This business hasn't connected Stripe yet",
-  );
+const EXPIRES_AFTER_MS = 48 * 60 * 60 * 1000;
 
-function feeFor(amountMinor: number) {
-  const bps = config.STRIPE_APP_FEE_BPS;
-  return bps > 0 ? Math.floor((amountMinor * bps) / 10_000) : 0;
+export function bankSettingsOf(tenant: TenantDoc) {
+  return {
+    bankTransferEnabled: tenant.bankTransferEnabled === true,
+    bankAccountKey: tenant.bankAccountKey ?? null,
+    bankAccountHolder: tenant.bankAccountHolder ?? null,
+  };
 }
 
-const ACCOUNT_INCLUDE = [
-  "configuration.merchant",
-  "identity",
-  "requirements",
-] as ("configuration.merchant" | "identity" | "requirements")[];
-
-const retrieveAccount = (
-  stripe: ReturnType<typeof requireStripe>,
-  id: string,
-) => stripe.v2.core.accounts.retrieve(id, { include: ACCOUNT_INCLUDE });
-
-export async function ensureConnectAccount(tenant: TenantDoc): Promise<string> {
-  if (tenant.stripe?.accountId) return tenant.stripe.accountId;
-  const stripe = requireStripe();
-  const account = await stripe.v2.core.accounts.create({
-    dashboard: "none",
-    defaults: {
-      currency: tenant.currency.toLowerCase(),
-      responsibilities: {
-        fees_collector: "application",
-        losses_collector: "stripe",
-      },
-    },
-    display_name: tenant.name,
-    identity: { country: "MX", entity_type: "individual" },
-    configuration: {
-      merchant: { capabilities: { card_payments: { requested: true } } },
-    },
-    metadata: { tenantId: tenant._id.toHexString(), slug: tenant.slug },
-  });
+export async function saveBankSettings(
+  tenant: TenantDoc,
+  input: {
+    bankTransferEnabled: boolean;
+    bankAccountKey?: string;
+    bankAccountHolder?: string;
+  },
+) {
+  const { bankAccountKey, bankAccountHolder } = input;
   await platform.tenants.updateOne(
     { _id: tenant._id },
     {
       $set: {
-        "stripe.accountId": account.id,
-        "stripe.detailsSubmitted": false,
-        "stripe.chargesEnabled": false,
+        bankTransferEnabled: input.bankTransferEnabled,
+        ...(bankAccountKey && { bankAccountKey }),
+        ...(bankAccountHolder && { bankAccountHolder }),
         updatedAt: new Date(),
+      },
+      $unset: {
+        ...(!bankAccountKey && { bankAccountKey: "" }),
+        ...(!bankAccountHolder && { bankAccountHolder: "" }),
       },
     },
   );
-  return account.id;
-}
-
-export async function createOnboardingLink(tenant: TenantDoc) {
-  if (!config.FRONTEND_URL) {
-    throw new AppError(
-      503,
-      "PAYMENTS_DISABLED",
-      "FRONTEND_URL is not configured for Stripe onboarding",
-    );
-  }
-  const stripe = requireStripe();
-  const accountId = await ensureConnectAccount(tenant);
-  const base = config.FRONTEND_URL.replace(/\/$/, "");
-  const [link, account] = await Promise.all([
-    stripe.v2.core.accountLinks.create({
-      account: accountId,
-      use_case: {
-        type: "account_onboarding",
-        account_onboarding: {
-          refresh_url: `${base}/dashboard/pagos?stripe=refresh`,
-          return_url: `${base}/dashboard/pagos?stripe=return`,
-        },
-      },
-    }),
-    retrieveAccount(stripe, accountId),
-  ]);
-  await syncAccountToTenant(tenant._id, account);
-  return { accountId, url: link.url };
-}
-
-export async function connectStatus(tenant: TenantDoc) {
-  const accountId = tenant.stripe?.accountId;
-  if (!accountId) {
-    return { connected: false as const, accountId: null as string | null };
-  }
-  const stripe = requireStripe();
-  try {
-    const account = await retrieveAccount(stripe, accountId);
-    const updated = await syncAccountToTenant(tenant._id, account);
-    return {
-      connected: updated.chargesEnabled === true,
-      accountId,
-      detailsSubmitted: updated.detailsSubmitted ?? false,
-      chargesEnabled: updated.chargesEnabled ?? false,
-    };
-  } catch {
-    return {
-      connected: false as const,
-      accountId,
-      detailsSubmitted: tenant.stripe?.detailsSubmitted ?? false,
-      chargesEnabled: false as const,
-    };
-  }
-}
-
-type ConnectedState = {
-  accountId: string;
-  detailsSubmitted: boolean;
-  chargesEnabled: boolean;
-};
-
-function accountState(account: {
-  id: string;
-  configuration?: {
-    merchant?: { capabilities?: { card_payments?: { status?: string } } };
+  return {
+    bankTransferEnabled: input.bankTransferEnabled,
+    bankAccountKey: bankAccountKey ?? null,
+    bankAccountHolder: bankAccountHolder ?? null,
   };
-  requirements?: { entries?: { awaiting_action_from?: string }[] };
-}): ConnectedState {
-  const cardStatus =
-    account.configuration?.merchant?.capabilities?.card_payments?.status;
-  const entries = account.requirements?.entries ?? [];
-  const detailsSubmitted =
-    cardStatus === "active" ||
-    (entries.length > 0 &&
-      entries.every((entry) => entry.awaiting_action_from !== "user"));
-  const chargesEnabled = cardStatus === "active";
-  return { accountId: account.id, detailsSubmitted, chargesEnabled };
 }
 
-async function syncAccountToTenant(
-  tenantId: ObjectId,
-  account: Parameters<typeof accountState>[0],
-) {
-  const state = accountState(account);
-  await platform.tenants.updateOne(
-    { _id: tenantId },
-    {
-      $set: {
-        stripe: {
-          ...state,
-          ...(state.detailsSubmitted &&
-            state.chargesEnabled && { onboardedAt: new Date() }),
-        },
-        updatedAt: new Date(),
-      },
-    },
+export const transfersAvailable = (tenant: TenantDoc) =>
+  tenant.bankTransferEnabled === true &&
+  Boolean(tenant.bankAccountKey && tenant.bankAccountHolder);
+
+const view = (p: PaymentDoc) => ({
+  id: p._id.toHexString(),
+  appointmentId: p.appointmentId.toHexString(),
+  status: p.status,
+  amountMinor: p.amountMinor,
+  currency: p.currency,
+  holder: p.bank.holder,
+  clabe: p.bank.clabe,
+  createdAt: p.createdAt,
+  expiresAt: p.expiresAt,
+  ...(p.reference && { reference: p.reference }),
+  ...(p.resolvedAt && { resolvedAt: p.resolvedAt }),
+  ...(p.rejectionReason && { rejectionReason: p.rejectionReason }),
+});
+
+export async function expireStale(tenantId: ObjectId) {
+  const t = forTenant(tenantId);
+  const now = new Date();
+  const stale = await collect(
+    t.payments
+      .find({ status: "pending", expiresAt: { $lte: now } })
+      .project<Pick<PaymentDoc, "_id" | "appointmentId">>({
+        appointmentId: 1,
+      }),
   );
-  return state;
+  for (const { _id, appointmentId } of stale) {
+    await transaction(async (session) => {
+      const { matchedCount } = await t.payments.updateOne(
+        { _id, status: "pending" },
+        {
+          $set: { status: "expired", resolvedAt: now },
+          $push: { history: { status: "expired", at: now } },
+        },
+        { session },
+      );
+      if (matchedCount === 0) return;
+      await t.appointments.updateOne(
+        { _id: appointmentId, "payment.paymentId": _id },
+        { $set: { "payment.status": "expired", updatedAt: now } },
+        { session },
+      );
+    });
+  }
 }
 
-/** Authoritative refresh from a v2 account notification (thin event). */
-export async function syncAccountById(accountId: string) {
-  const tenant = await platform.tenants.findOne({
-    "stripe.accountId": accountId,
-  });
-  if (!tenant) return;
-  const account = await retrieveAccount(requireStripe(), accountId);
-  await syncAccountToTenant(tenant._id, account);
-}
-
-export async function createPaymentIntent(
+export async function createTransfer(
   tenant: TenantDoc,
   appointmentId: ObjectId,
 ) {
-  const accountId = tenant.stripe?.accountId;
-  if (!accountId || tenant.stripe?.chargesEnabled !== true) {
-    throw notConnected();
+  const { bankAccountKey: clabe, bankAccountHolder: holder } = tenant;
+  if (!clabe || !holder || !transfersAvailable(tenant)) {
+    throw new AppError(
+      409,
+      "TRANSFER_NOT_AVAILABLE",
+      "This business does not accept bank transfers",
+    );
   }
   const t = forTenant(tenant._id);
+  await expireStale(tenant._id);
   const appointment = await t.appointments.findOne({ _id: appointmentId });
   if (appointment?.status !== "confirmed") {
     throw new AppError(404, "NOT_FOUND", "Not found");
@@ -190,199 +123,211 @@ export async function createPaymentIntent(
   if (appointment.totalMinor <= 0) {
     throw new AppError(422, "NOTHING_TO_CHARGE", "This visit has no amount");
   }
-
-  const stripe = requireStripe();
-  const existing = appointment.payment;
-
-  if (
-    existing?.provider === "stripe" &&
-    existing.status === "requires_payment"
-  ) {
-    try {
-      const pi = await stripe.paymentIntents.retrieve(
-        existing.intentId,
-        undefined,
-        { stripeAccount: accountId },
-      );
-      if (
-        pi.status === "requires_payment_method" ||
-        pi.status === "requires_confirmation" ||
-        pi.status === "requires_action"
-      ) {
-        if (!pi.client_secret) {
-          throw new AppError(502, "PAYMENT_ERROR", "Stripe gave no secret");
-        }
-        return toIntentResponse(tenant, appointment, pi);
-      }
-    } catch (err) {
-      if (err instanceof AppError) throw err;
-      // The old intent is gone or unusable: fall through and create a new one.
-    }
-  }
-  if (existing?.status === "paid") {
+  if (appointment.payment?.status === "paid") {
     throw new AppError(409, "ALREADY_PAID", "This visit is already paid");
   }
+  const open = () =>
+    t.payments.findOne({ appointmentId: appointment._id, status: "pending" });
+  const existing = await open();
+  if (existing) return view(existing);
 
-  const applicationFee = feeFor(appointment.totalMinor);
-  const pi = await stripe.paymentIntents.create(
-    {
-      amount: appointment.totalMinor,
-      currency: tenant.currency.toLowerCase(),
-      automatic_payment_methods: {
-        enabled: true,
-        allow_redirects: "never",
-      },
-      ...(applicationFee > 0 && {
-        application_fee_amount: applicationFee,
-      }),
-      metadata: {
-        tenantId: tenant._id.toHexString(),
-        appointmentId: appointment._id.toHexString(),
-      },
-      description: `Cita ${appointment._id.toHexString()} · ${tenant.slug}`,
-    },
-    {
-      stripeAccount: accountId,
-      idempotencyKey: `pi_${appointment._id.toHexString()}`,
-    },
-  );
-  if (!pi.client_secret) {
-    throw new AppError(502, "PAYMENT_ERROR", "Stripe gave no secret");
-  }
-  await t.appointments.updateOne(
-    { _id: appointment._id },
-    {
-      $set: {
-        payment: {
-          provider: "stripe",
-          intentId: pi.id,
-          status: "requires_payment",
-          amountMinor: appointment.totalMinor,
-          ...(applicationFee > 0 && {
-            applicationFeeMinor: applicationFee,
-          }),
+  const now = new Date();
+  const payment: PaymentDoc = {
+    _id: new ObjectId(),
+    tenantId: tenant._id,
+    appointmentId: appointment._id,
+    method: "spei",
+    status: "pending",
+    amountMinor: appointment.totalMinor,
+    currency: appointment.currency,
+    bank: { clabe, holder },
+    createdAt: now,
+    expiresAt: new Date(now.getTime() + EXPIRES_AFTER_MS),
+    history: [{ status: "pending", at: now }],
+  };
+  try {
+    await transaction(async (session) => {
+      const { tenantId: _, ...doc } = payment;
+      await t.payments.insertOne(doc, { session });
+      await t.appointments.updateOne(
+        { _id: appointment._id },
+        {
+          $set: {
+            payment: {
+              provider: "spei",
+              paymentId: payment._id,
+              status: "pending",
+              amountMinor: payment.amountMinor,
+            },
+            updatedAt: now,
+          },
         },
-        updatedAt: new Date(),
-      },
-    },
-  );
-  return toIntentResponse(
-    tenant,
-    { ...appointment, totalMinor: appointment.totalMinor },
-    pi,
-  );
+        { session },
+      );
+    });
+  } catch (err) {
+
+    const winner = isDuplicate(err) && (await open());
+    if (winner) return view(winner);
+    throw err;
+  }
+  return view(payment);
 }
 
-function toIntentResponse(
-  tenant: TenantDoc,
-  appointment: AppointmentDoc,
-  pi: Stripe.PaymentIntent,
-) {
-  return {
-    appointmentId: appointment._id.toHexString(),
-    clientSecret: pi.client_secret as string,
-    accountId: tenant.stripe?.accountId as string,
-    publishableKey: config.STRIPE_PUBLISHABLE_KEY ?? null,
-    amountMinor: pi.amount,
-    currency: tenant.currency,
-    paymentStatus: "requires_payment" as const,
-  };
-}
+type Customer = Pick<CustomerDoc, "name" | "phone">;
 
-export async function refundAppointment(
-  tenant: TenantDoc,
-  appointmentId: ObjectId,
-) {
-  const accountId = tenant.stripe?.accountId;
-  if (!accountId) throw notConnected();
+export async function listPayments(tenant: TenantDoc, status: PaymentStatus) {
   const t = forTenant(tenant._id);
-  const appointment = await t.appointments.findOne({ _id: appointmentId });
-  if (!appointment) throw new AppError(404, "NOT_FOUND", "Not found");
-  if (appointment.payment?.status !== "paid") {
-    throw new AppError(409, "NOT_PAID", "This visit is not paid");
-  }
-  const stripe = requireStripe();
-  await stripe.refunds.create(
-    { payment_intent: appointment.payment.intentId },
-    { stripeAccount: accountId },
+  await expireStale(tenant._id);
+  const payments = await collect(
+    t.payments.find({ status }).sort({ createdAt: -1 }).limit(100),
   );
-  await t.appointments.updateOne(
-    { _id: appointment._id, "payment.status": "paid" },
-    {
-      $set: { "payment.status": "refunded", updatedAt: new Date() },
-    },
+  const appointments = await mapBy(
+    t.appointments
+      .find({ _id: { $in: payments.map((p) => p.appointmentId) } })
+      .project<WithId<Pick<AppointmentDoc, "startAt" | "customerId">>>({
+        startAt: 1,
+        customerId: 1,
+      }),
+    (a) => a._id.toHexString(),
   );
-  return {
-    appointmentId: appointment._id.toHexString(),
-    status: "refunded" as const,
-  };
+  const customers = await mapBy(
+    t.customers
+      .find({
+        _id: {
+          $in: [...appointments.values()].map((a) => a.customerId),
+        },
+      })
+      .project<WithId<Customer>>({ name: 1, phone: 1 }),
+    (c) => c._id.toHexString(),
+  );
+  return payments.map((p) => {
+    const appointment = appointments.get(p.appointmentId.toHexString());
+    const customer = appointment
+      ? customers.get(appointment.customerId.toHexString())
+      : undefined;
+    return {
+      ...view(p),
+      startAt: appointment?.startAt ?? null,
+      customerName: customer?.name ?? null,
+      customerPhone: customer?.phone ?? null,
+      history: p.history,
+    };
+  });
 }
 
-async function markPaid(intentId: string) {
-  await platform.appointments.updateOne(
-    { "payment.intentId": intentId, "payment.status": "requires_payment" },
-    {
-      $set: {
-        "payment.status": "paid",
-        "payment.paidAt": new Date(),
-        updatedAt: new Date(),
-      },
-    },
+const invalidTransition = () =>
+  new AppError(
+    409,
+    "INVALID_TRANSITION",
+    "This payment was already resolved or has expired",
   );
-}
 
-async function markFailed(intentId: string) {
-  await platform.appointments.updateOne(
-    { "payment.intentId": intentId, "payment.status": "requires_payment" },
-    {
-      $set: { "payment.status": "failed", updatedAt: new Date() },
-    },
-  );
-}
-
-async function markRefunded(intentId: string) {
-  await platform.appointments.updateOne(
-    { "payment.intentId": intentId, "payment.status": "paid" },
-    {
-      $set: { "payment.status": "refunded", updatedAt: new Date() },
-    },
-  );
-}
-
-export async function handleStripeEvent(event: Stripe.Event) {
-  switch (event.type) {
-    case "payment_intent.succeeded": {
-      const pi = event.data.object;
-      await markPaid(pi.id);
-      break;
-    }
-    case "payment_intent.payment_failed":
-    case "payment_intent.canceled": {
-      const pi = event.data.object;
-      await markFailed(pi.id);
-      break;
-    }
-    case "charge.refunded": {
-      const charge = event.data.object;
-      const pi = charge.payment_intent;
-      if (typeof pi === "string" && pi.startsWith("pi_")) {
-        await markRefunded(pi);
-      }
-      break;
-    }
-    case "account.updated": {
-      // v1 accounts are gone on new platforms; v2 speaks thin events below.
-      break;
-    }
-    default:
-      break;
-  }
-}
-
-export async function handleThinNotification(
-  type: string,
-  relatedId: string | undefined,
+async function resolve(
+  tenant: TenantDoc,
+  paymentId: ObjectId,
+  staffId: ObjectId,
+  status: "paid" | "rejected",
+  check: (payment: PaymentDoc, appointment: AppointmentDoc) => void,
+  fields: { reference?: string; rejectionReason?: string },
 ) {
-  if (!type.startsWith("v2.core.account") || !relatedId) return;
-  await syncAccountById(relatedId);
+  const t = forTenant(tenant._id);
+  await expireStale(tenant._id);
+  const payment = await t.payments.findOne({ _id: paymentId });
+  if (!payment) throw new AppError(404, "NOT_FOUND", "Not found");
+  if (payment.status !== "pending") throw invalidTransition();
+  const appointment = await t.appointments.findOne({
+    _id: payment.appointmentId,
+  });
+  if (!appointment) throw new AppError(404, "NOT_FOUND", "Not found");
+  check(payment, appointment);
+
+  const now = new Date();
+  await transaction(async (session) => {
+    const { matchedCount } = await t.payments.updateOne(
+      { _id: payment._id, status: "pending" },
+      {
+        $set: { status, resolvedAt: now, resolvedBy: staffId, ...fields },
+        $push: {
+          history: {
+            status,
+            at: now,
+            by: staffId,
+            ...(fields.rejectionReason && { note: fields.rejectionReason }),
+          },
+        },
+      },
+      { session },
+    );
+    if (matchedCount === 0) throw invalidTransition();
+    await t.appointments.updateOne(
+      { _id: appointment._id, "payment.paymentId": payment._id },
+      {
+        $set: {
+          "payment.status": status,
+          ...(status === "paid" && { "payment.paidAt": now }),
+          updatedAt: now,
+        },
+      },
+      { session },
+    );
+  });
+  const resolved = await t.payments.findOne({ _id: payment._id });
+  if (!resolved) throw new AppError(404, "NOT_FOUND", "Not found");
+  return view(resolved);
 }
+
+export const confirmPayment = (
+  tenant: TenantDoc,
+  staffId: ObjectId,
+  paymentId: ObjectId,
+  input: { receivedMinor: number; reference?: string },
+) =>
+  resolve(
+    tenant,
+    paymentId,
+    staffId,
+    "paid",
+    (payment, appointment) => {
+      if (input.receivedMinor !== payment.amountMinor) {
+        throw new AppError(
+          422,
+          "AMOUNT_MISMATCH",
+          "The amount received does not match the amount owed",
+        );
+      }
+      if (appointment.totalMinor !== payment.amountMinor) {
+        throw new AppError(
+          409,
+          "AMOUNT_CHANGED",
+          "The appointment total changed since this transfer was requested",
+        );
+      }
+      if (
+        appointment.status !== "confirmed" &&
+        appointment.status !== "completed"
+      ) {
+        throw new AppError(
+          409,
+          "APPOINTMENT_NOT_PAYABLE",
+          "This appointment was cancelled",
+        );
+      }
+    },
+    input.reference ? { reference: input.reference } : {},
+  );
+
+export const rejectPayment = (
+  tenant: TenantDoc,
+  staffId: ObjectId,
+  paymentId: ObjectId,
+  input: { reason?: string },
+) =>
+  resolve(
+    tenant,
+    paymentId,
+    staffId,
+    "rejected",
+    () => {},
+    input.reason ? { rejectionReason: input.reason } : {},
+  );

@@ -58,7 +58,7 @@ export async function createTimeOff(
   }
   const t = forTenant(auth.tenantId);
   await transaction(async (session) => {
-    // Bump each barber's lock as it is read: no list of ids is held.
+
     if (barber) {
       await t.barbers.updateOne(
         { _id: barber._id },

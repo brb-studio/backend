@@ -148,6 +148,6 @@ Ningún archivo `.ts` supera las **500 líneas** (incluye `.test.ts`: si el test
   - `src/db/collections.ts` — 1186 (registro de tipos+validadores+índices; dirección: dividir por dominio, p. ej. `db/<dominio>.ts`, cuando se toque).
   - `src/features/booking/service.ts` — 964 (dirección: ya existen `order.ts`/`customers.ts`; sigue extrayendo por subdominio: cancel, reschedule, walk-in).
   - `src/features/platform/queries.ts` — 543 (dirección: `summary`/`breakdown`/`listAppointments`/`options` a módulos propios).
-  - `src/features/billing/service.ts` — 511 (dirección: separar checkout/portal/webhook/referidos).
+  - `src/features/billing/service.ts` — ~430 (dirección: separar pagos/referidos).
 - **Cómo dividir:** por responsabilidad (HTTP → servicio → reglas puras, ver sección 3) y por subdominio (un archivo = un tema: `barbers/service.ts` + `barbers/time-off.ts` es el ejemplo a seguir). Nombres por lo que contienen, no `utils.ts`/`helpers.ts` genéricos dentro de features.
 - **Verificación:** antes de dar por terminado, corre `find src tests -name '*.ts' -exec wc -l {} + | sort -rn | head` y confirma que ningún archivo que tocaste supera 500 líneas.

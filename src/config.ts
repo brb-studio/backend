@@ -27,26 +27,19 @@ const schema = z
       .regex(/^[a-z0-9]+([.-][a-z0-9]+)*$/)
       .default("localhost"),
     PROXY_SECRET: z.string().min(32, "use at least 32 characters").optional(),
-    STRIPE_SECRET_KEY: z
-      .string()
-      .regex(/^sk_(test|live)_/, "must be a Stripe secret key")
-      .optional(),
-    STRIPE_WEBHOOK_SECRET: z
-      .string()
-      .regex(/^whsec_/, "must be a Stripe webhook secret")
-      .optional(),
-    STRIPE_PUBLISHABLE_KEY: z
-      .string()
-      .regex(/^pk_(test|live)_/, "must be a Stripe publishable key")
-      .optional(),
     FRONTEND_URL: z.url().optional(),
     CORS_ORIGINS: z.string().default(""),
-    STRIPE_APP_FEE_BPS: z.coerce.number().int().min(0).max(10000).default(0),
-    /** The one monthly price barbershops pay for the app. */
-    STRIPE_SUBSCRIPTION_PRICE: z
+    /** Signs the proof of booking guests use to ask for transfer details. */
+    PAYMENT_TOKEN_SECRET: z
       .string()
-      .regex(/^price_\w+$/, "must be a Stripe price id")
+      .min(32, "use at least 32 characters")
       .optional(),
+    /** The one monthly price barbershops pay for the app, in minor units (30000 = 300.00). */
+    SUBSCRIPTION_PRICE_MINOR: z.coerce.number().int().min(1).default(30_000),
+    SUBSCRIPTION_CURRENCY: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .default("MXN"),
     VAPID_PUBLIC_KEY: z
       .string()
       .regex(/^[\w-]{87}$/)
@@ -73,21 +66,10 @@ const schema = z
     path: ["PROXY_SECRET"],
     error: "required in production, or every visitor shares one rate limit",
   })
-  .refine(
-    (env) =>
-      Boolean(env.STRIPE_SECRET_KEY) === Boolean(env.STRIPE_WEBHOOK_SECRET),
-    {
-      path: ["STRIPE_SECRET_KEY"],
-      error: "set both STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET, or neither",
-    },
-  )
-  .refine(
-    (env) => !env.STRIPE_SUBSCRIPTION_PRICE || Boolean(env.STRIPE_SECRET_KEY),
-    {
-      path: ["STRIPE_SUBSCRIPTION_PRICE"],
-      error: "needs STRIPE_SECRET_KEY",
-    },
-  )
+  .refine((env) => env.NODE_ENV !== "production" || env.PAYMENT_TOKEN_SECRET, {
+    path: ["PAYMENT_TOKEN_SECRET"],
+    error: "required in production, or guests cannot pay by transfer",
+  })
   .refine((env) => env.NODE_ENV !== "test" || env.MONGO_DB.endsWith("_test"), {
     path: ["MONGO_DB"],
     error: "tests must use a *_test database",

@@ -11,7 +11,7 @@ context: |
   y llama a esta API solo desde su servidor.
 
   Stack: Bun 1.4, TypeScript estricto (sin any), Hono (solo core), Zod 4, driver oficial de
-  MongoDB 7 sobre un replica set local (rs0, transacciones), Stripe (Billing y Connect),
+  MongoDB 7 sobre un replica set local (rs0, transacciones), pagos de citas y suscripciones por transferencia SPEI,
   pruebas con bun test (unitarias en src/, integración en tests/ contra MongoDB real).
 
   Convenciones:

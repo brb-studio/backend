@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
 import type { TenantDoc } from "../../db/scoped";
 import {
-  hasLiveSubscription,
+  isPaidUp,
   newReferralCode,
   normalizeCode,
+  periodEnd,
   REFERRAL_CODE,
   rewardFor,
-  toStatus,
 } from "./rules";
 
 describe("referral codes", () => {
@@ -33,31 +33,42 @@ describe("rewardFor", () => {
   });
 });
 
-describe("toStatus", () => {
-  test("maps Stripe statuses; a pending first payment changes nothing", () => {
-    expect(toStatus("active")).toBe("active");
-    expect(toStatus("trialing")).toBe("trialing");
-    expect(toStatus("past_due")).toBe("past_due");
-    expect(toStatus("unpaid")).toBe("past_due");
-    expect(toStatus("canceled")).toBe("canceled");
-    expect(toStatus("incomplete_expired")).toBe("canceled");
-    expect(toStatus("incomplete")).toBeNull();
+describe("periodEnd", () => {
+  const now = new Date("2026-01-31T12:00:00Z");
+
+  test("adds one calendar month, clamped to the month's last day", () => {
+    expect(periodEnd(undefined, now).toISOString()).toBe(
+      "2026-02-28T12:00:00.000Z",
+    );
+  });
+
+  test("paying early extends what is left instead of wasting it", () => {
+    const left = new Date("2026-03-10T00:00:00Z");
+    expect(periodEnd(left, now).toISOString()).toBe("2026-04-10T00:00:00.000Z");
+    const over = new Date("2026-01-01T00:00:00Z");
+    expect(periodEnd(over, now).toISOString()).toBe("2026-02-28T12:00:00.000Z");
   });
 });
 
-test("hasLiveSubscription", () => {
-  const tenant = (status: TenantDoc["subscription"]["status"], sub?: string) =>
+test("isPaidUp", () => {
+  const now = new Date("2026-02-01T00:00:00Z");
+  const tenant = (
+    plan: TenantDoc["subscription"]["plan"],
+    status: TenantDoc["subscription"]["status"],
+    end?: string,
+  ) =>
     ({
       _id: new ObjectId(),
       subscription: {
-        plan: "basic",
+        plan,
         status,
         limits: { branches: 1, barbers: 5 },
+        ...(end && { currentPeriodEnd: new Date(end) }),
       },
-      ...(sub && { billing: { stripeSubscriptionId: sub } }),
     }) as TenantDoc;
-  expect(hasLiveSubscription(tenant("active", "sub_1"))).toBe(true);
-  expect(hasLiveSubscription(tenant("past_due", "sub_1"))).toBe(true);
-  expect(hasLiveSubscription(tenant("canceled", "sub_1"))).toBe(false);
-  expect(hasLiveSubscription(tenant("trialing"))).toBe(false);
+  expect(isPaidUp(tenant("pro", "active", "2026-03-01"), now)).toBe(true);
+  expect(isPaidUp(tenant("pro", "active", "2026-01-15"), now)).toBe(false);
+  expect(isPaidUp(tenant("pro", "canceled", "2026-03-01"), now)).toBe(false);
+  expect(isPaidUp(tenant("trial", "trialing", "2026-03-01"), now)).toBe(false);
+  expect(isPaidUp(tenant("pro", "active"), now)).toBe(false);
 });

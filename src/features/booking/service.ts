@@ -35,7 +35,6 @@ import { ownBarberId } from "../barbers/service";
 import { canServe, type Request } from "../catalog/rules";
 import { resolveRequest } from "../catalog/service";
 import { deliverPush, notifyBarber } from "../notifications/service";
-import { paymentsEnabled, requireStripe } from "../payments/stripe";
 import { resolveCommission } from "../platform/commission";
 import { priceFor, redeem, release } from "../promotions/service";
 import { getBranch } from "../tenancy/service";
@@ -427,33 +426,6 @@ async function cancel(
     ];
   });
   pushAfterCommit(tenant, notes);
-  await refundIfPaid(tenant, appointment);
-}
-
-async function refundIfPaid(tenant: TenantDoc, appointment: AppointmentDoc) {
-  if (appointment.payment?.status !== "paid") return;
-  const accountId = tenant.stripe?.accountId;
-  if (!accountId || !paymentsEnabled()) return;
-  try {
-    await requireStripe().refunds.create(
-      { payment_intent: appointment.payment.intentId },
-      { stripeAccount: accountId },
-    );
-    await forTenant(tenant._id).appointments.updateOne(
-      { _id: appointment._id, "payment.status": "paid" },
-      { $set: { "payment.status": "refunded", updatedAt: new Date() } },
-    );
-  } catch (err: unknown) {
-    console.error(
-      JSON.stringify({
-        level: "error",
-        event: "refund_failed",
-        tenant: tenant.slug,
-        appointment: appointment._id.toHexString(),
-        message: String(err),
-      }),
-    );
-  }
 }
 
 export async function listMine(tenant: TenantDoc, auth: Auth) {

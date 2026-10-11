@@ -5,16 +5,12 @@ import { forTenant, type ImageDoc, platform } from "../../db/scoped";
 import { AppError, type Auth } from "../../shared/http";
 
 export const MAX_IMAGE_BYTES = 1024 * 1024;
-// ponytail: flat cap per tenant, no cleanup of replaced photos; a per-plan quota + GC when storage matters.
+
 const MAX_IMAGES_PER_TENANT = 500;
 const HOUR_MS = 60 * 60 * 1000;
 
 export type ImageType = "image/jpeg" | "image/png" | "image/webp";
 
-/**
- * The real type, from the file's first bytes; the client's Content-Type is never trusted. Only JPEG,
- * PNG and WebP: SVG is refused because it can carry scripts.
- */
 export function sniff(bytes: Uint8Array): ImageType | undefined {
   const at = (offset: number, signature: number[]) =>
     signature.every((byte, i) => bytes[offset + i] === byte);
@@ -28,7 +24,6 @@ export function sniff(bytes: Uint8Array): ImageType | undefined {
   return undefined;
 }
 
-/** Stores a photo for this tenant. Ids are 128-bit random, so nobody can walk through other shops' files. */
 export async function uploadImage(auth: Auth, bytes: Uint8Array) {
   if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) {
     throw new AppError(413, "TOO_LARGE", "Images must be 1 MB or less");

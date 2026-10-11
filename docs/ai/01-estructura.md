@@ -44,7 +44,6 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 ```
 
 - `/platform/*` está **fuera** de `/v1`: sin tenant por host, con su propio auth (`features/platform/auth.ts`, sesiones `platformSessions`). Es el único lugar que puede usar `platform.*`.
-- `/webhooks/stripe` está fuera de `/v1` y re-lee la suscripción desde la API de Stripe (los eventos llegan desordenados).
 - `GET /images/:id` está fuera de `/v1` (sin tenant, IDs aleatorios 128-bit, `Cache-Control: immutable`).
 
 ## Mapa `features/` → dominio
@@ -60,8 +59,8 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 | `promotions/` | promos + pricing + redenciones | `rules.ts` (`priceFor`: lo cotizado = lo cobrado) |
 | `notifications/` | notificaciones in-app, SSE, push subscriptions | — |
 | `platform/` | dashboard staff global: auth, reportes, comisión, payouts | `commission.ts` (`resolveCommission`, único lugar de la regla) |
-| `billing/` | checkout/portal/webhook sync, referidos | `rules.ts` |
-| `payments/` | Stripe Connect (cobro al cliente final), aparte de Billing | `stripe.ts` |
+| `billing/` | suscripción por transferencia SPEI a `ownerProject`, referidos | `rules.ts` |
+| `payments/` | Transferencias SPEI directas a la CLABE de la barbería, confirmación manual | `service.ts`, `clabe.ts`, `token.ts` |
 | `images/` | upload JPEG/PNG/WebP ≤1MB, tipo leído de los bytes | — |
 
 ## Base de datos (`db/`)

@@ -56,8 +56,8 @@ La configuración SHALL validarse al arrancar sin mostrar valores, con estas reg
 - Fuera de producción, MongoDB MUST ser `localhost`, `127.0.0.1` o `[::1]`.
 - Bajo pruebas, la base MUST terminar en `_test`.
 - Las llaves VAPID van completas o ausentes.
-- `STRIPE_SECRET_KEY` y `STRIPE_WEBHOOK_SECRET` van juntas.
-- El precio de suscripción requiere la llave de Stripe.
+- `PAYMENT_TOKEN_SECRET` es obligatoria en producción (firma el comprobante de reserva de los invitados).
+- El precio de suscripción (`SUBSCRIPTION_PRICE_MINOR`) es un entero positivo y su moneda (`SUBSCRIPTION_CURRENCY`) un código de 3 letras mayúsculas.
 
 Si la configuración es inválida, el proceso no arranca.
 
