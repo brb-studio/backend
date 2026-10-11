@@ -1,10 +1,8 @@
-import { app } from "./app";
+import { app, dbReady } from "./app";
 import { config } from "./config";
-import { client, db } from "./db/client";
-import { specs } from "./db/collections";
-import { ensureCollections } from "./db/setup";
+import { client } from "./db/client";
 
-await ensureCollections(db, specs);
+await dbReady();
 
 const server = Bun.serve({
   port: config.PORT,

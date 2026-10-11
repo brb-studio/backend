@@ -37,7 +37,7 @@ Si vas a cambiar comportamiento de negocio: lee además el `spec.md` del capabil
 bun run typecheck   # tsc --noEmit
 bun run lint        # biome ci .
 bun run test        # unitarias src/, sin DB
-bun run test:int    # integración tests/, replica set local, DB magicstudio_test
+bun run test:int    # integración tests/, replica set local, DB brb-studio_test
 ```
 
 `openspec validate --specs --strict` si tocaste `openspec/specs/`.

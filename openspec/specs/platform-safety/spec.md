@@ -38,7 +38,7 @@ Los límites de intentos SHALL contarse en MongoDB (colección `rateLimits`) con
 - **THEN** pasan exactamente 20
 
 ### Requirement: IP real del visitante
-El backend SHALL tomar como IP del visitante el `X-Forwarded-For` solo si la petición trae el secreto compartido `X-Proxy-Secret` igual a `PROXY_SECRET`, comparado en tiempo constante. De lo contrario usa la dirección del socket. `PROXY_SECRET` MUST existir en producción, porque sin él todos los visitantes compartirían un solo límite.
+El backend SHALL tomar como IP del visitante el `X-Visitor-IP` (o, si falta, el `X-Forwarded-For`, que Vercel sobrescribe) solo si la petición trae el secreto compartido `X-Proxy-Secret` igual a `PROXY_SECRET`, comparado en tiempo constante. De lo contrario usa la dirección del socket; en Vercel, donde no hay socket, usa `X-Vercel-Forwarded-For`, que pone Vercel. `PROXY_SECRET` MUST existir en producción, porque sin él todos los visitantes compartirían un solo límite.
 
 #### Scenario: IP falsificada
 - **WHEN** un cliente envía `X-Forwarded-For: 1.2.3.4` sin el secreto

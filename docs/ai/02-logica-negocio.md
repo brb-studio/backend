@@ -28,7 +28,7 @@
 
 ## Invariantes que la IA debe respetar (resumen; el detalle está en cada spec)
 
-1. **Tenancy estricta:** el tenant viene del host (`X-Forwarded-Host`), nunca del body. Sesión solo válida en el host de su tenant. Bodies estrictos: keys desconocidas = 422.
+1. **Tenancy estricta:** el tenant viene del host (`X-Tenant-Host` o `X-Forwarded-Host`), nunca del body. Sesión solo válida en el host de su tenant. Bodies estrictos: keys desconocidas = 422.
 2. **Snapshots de cita:** la cita embebe nombres, duraciones, precios y términos de descuento al momento de reservar. El historial nunca lee el catálogo vivo.
 3. **Precio único:** `promotions/rules.ts → priceFor()` se usa en `quote` y en `booking`. Lo cotizado = lo cobrado. Redención con `$inc` condicional en la transacción (no exceder `maxRedemptions`); cancelar la devuelve.
 4. **Anti-doble-reserva:** transacción que sube `lockVersion` del barbero (WriteConflict → retry) + re-chequeo con el mismo engine de disponibilidad + índice único parcial `{ barberId, startAt }` como backstop.

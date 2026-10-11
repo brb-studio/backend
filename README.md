@@ -31,7 +31,7 @@ bun run dev        # http://localhost:4000/health
 |---|---|
 | `bun run dev` / `bun run start` | Watch mode / plain start. Applies collection validators and indexes on boot |
 | `bun run test` | Unit tests (`src/`, no database) |
-| `bun run test:int` | Integration tests (`tests/`) against the local replica set, database `magicstudio_test` |
+| `bun run test:int` | Integration tests (`tests/`) against the local replica set, database `brb-studio_test` |
 | `bun run lint` / `bun run format` | Biome check / fix |
 | `bun run typecheck` | `tsc --noEmit` |
 | `bun run audit` | Fails on high/critical advisories |
@@ -40,9 +40,21 @@ bun run dev        # http://localhost:4000/health
 | `bun run platform-staff:create --email … --name …` | Creates a global platform staff account (outside any barbershop); prints its generated password once |
 | `bun run vapid:keys` | Prints a VAPID key pair for Web Push (`VAPID_*` in `.env`) |
 
+### Deploy (Vercel)
+
+Vercel's Hono preset serves the default export of `src/app.ts` on the Bun runtime (`vercel.json`: `bunVersion`, beta). `src/main.ts` is only for running it yourself. Collections and indexes are ensured on each instance's first request.
+
+1. Atlas: `mongodb+srv://…` URL (no `replicaSet=rs0`); Network Access must allow Vercel (dynamic IPs: `0.0.0.0/0` unless your plan has static IPs).
+2. `vercel link`, then `vercel env add` for every variable in `.env.example` except `PORT` (`NODE_ENV` is set by Vercel). `PROXY_SECRET` is required.
+3. `vercel deploy` (preview), check `GET /health`, then `vercel deploy --prod`.
+4. Point Stripe's webhook at `https://<domain>/webhooks/stripe` and put its new `whsec_…` in `STRIPE_WEBHOOK_SECRET`.
+5. Frontend: send the tenant host in `X-Tenant-Host` and the visitor IP in `X-Visitor-IP`. Vercel overwrites `X-Forwarded-Host`/`X-Forwarded-For`.
+
+Limits on Hobby: 300 s per request (the notifications SSE stream is cut and the browser reconnects), 4.5 MB bodies, 1 h of logs.
+
 ## API
 
-Every `/v1` request needs the tenant's host in `X-Forwarded-Host` (the frontend server forwards it): `<slug>.<PLATFORM_DOMAIN>` or the tenant's custom domain. Private routes also need `Authorization: Bearer <token>` from login/register. Errors are always `{ "error": { "code", "message", "issues"? } }`.
+Every `/v1` request needs the tenant's host in `X-Tenant-Host` or `X-Forwarded-Host` (the frontend server forwards it; on Vercel only `X-Tenant-Host` survives): `<slug>.<PLATFORM_DOMAIN>` or the tenant's custom domain. Private routes also need `Authorization: Bearer <token>` from login/register. Errors are always `{ "error": { "code", "message", "issues"? } }`.
 
 | Route | Who | Notes |
 |---|---|---|
@@ -112,7 +124,7 @@ Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or e
 - **Promotions:** pure rules (`promotions/rules.ts`), one `priceFor()` for quote and booking, so the price shown is the price charged. A redemption is a conditional `$inc` inside the booking transaction (`maxRedemptions` can't be exceeded); cancelling gives it back.
 - **Notifications:** the barber's notification is written in the booking transaction (no booking without its notice). Live: one MongoDB change stream per process feeds every open SSE connection, so it works across instances with no broker. Phones: Web Push (RFC 8291 encryption + VAPID) with `node:crypto`, no package; sent after commit in chunks of 20; 404/410 from the push service deletes the subscription; only known push-service hosts are accepted (no SSRF).
 - **Rate limits:** fixed windows in the `rateLimits` collection: one atomic upsert per attempt, so every API instance shares the count (30 concurrent attempts against a limit of 20 let exactly 20 through). Keys are SHA-256 hashed (no emails or phones stored); a TTL index drops old windows.
-- **Visitor IP:** only the frontend's server may state it: it sends `X-Forwarded-For` plus `X-Proxy-Secret` (`PROXY_SECRET`, required in production). Without the secret the API uses the socket address, so a forged header can't dodge a limit. The frontend picks the IP its own proxies wrote (`TRUSTED_PROXY_HOPS`).
+- **Visitor IP:** only the frontend's server may state it: it sends `X-Visitor-IP` (or `X-Forwarded-For`, which Vercel overwrites) plus `X-Proxy-Secret` (`PROXY_SECRET`, required in production). Without the secret the API uses the socket address, so a forged header can't dodge a limit. The frontend picks the IP its own proxies wrote (`TRUSTED_PROXY_HOPS`).
 - **Performance:** the availability engine converts timezones once per window instead of per slot (30 barbers × 31 days in ~6 ms), so it stays on the main thread; no workers needed.
 - **Subscriptions:** Stripe Billing on the platform account (the barbershop pays us), apart from Connect (`features/payments`, its customers pay the barbershop). Both arrive at `/webhooks/stripe`; billing ignores events carrying `account`. Webhooks re-read the subscription from the API (events arrive out of order) and copy plan, status, period end and limits onto the tenant, so `requireActiveSubscription` works unchanged. Billing routes skip that middleware: an expired barbershop must be able to pay.
 - **Referrals:** a barbershop that has paid once gets an 8-symbol code (no I/O/0/1). Another barbershop using it on its first paid month gets 20% off that month (Stripe coupon, `duration: once`). Once that payment succeeds, the referrer gets 10% of the friend's list price as Stripe customer balance, which Stripe spends on the next invoices by itself and which stacks (10 friends = a free month; leftovers carry over). One referral per referee ever (unique index) and the credit carries an idempotency key, so a retried webhook can't pay twice. Rules in `billing/rules.ts`.

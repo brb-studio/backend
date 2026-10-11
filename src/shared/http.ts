@@ -95,14 +95,18 @@ type ConnInfo = {
 
 const digest = (value: string) => createHash("sha256").update(value).digest();
 
-/**
- * The visitor's IP, for rate limits. Only the frontend's server can vouch for it: it sends the IP it
- * resolved in X-Forwarded-For together with the shared PROXY_SECRET. Anyone else gets their socket
- * address, so a forged header buys nothing.
- */
-export function clientIp(c: Context, secret: string | undefined) {
+export function clientIp(
+  c: Context,
+  secret: string | undefined,
+  onVercel = process.env.VERCEL === "1",
+) {
   const sent = c.req.header("X-Proxy-Secret");
-  const forwarded = c.req.header("X-Forwarded-For")?.split(",").at(-1)?.trim();
+  const forwarded = (
+    c.req.header("X-Visitor-IP") ?? c.req.header("X-Forwarded-For")
+  )
+    ?.split(",")
+    .at(-1)
+    ?.trim();
   if (
     secret &&
     sent &&
@@ -111,8 +115,11 @@ export function clientIp(c: Context, secret: string | undefined) {
   ) {
     return forwarded;
   }
+  const vercel = onVercel
+    ? c.req.header("X-Vercel-Forwarded-For")?.split(",")[0]?.trim()
+    : undefined;
   const server: ConnInfo | undefined = c.env;
-  return server?.requestIP?.(c.req.raw)?.address ?? "unknown";
+  return vercel || (server?.requestIP?.(c.req.raw)?.address ?? "unknown");
 }
 
 export const isDuplicate = (err: unknown) =>

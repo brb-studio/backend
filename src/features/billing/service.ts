@@ -23,7 +23,6 @@ import {
 } from "./rules";
 import type { checkoutInput } from "./schemas";
 
-
 const HOUR_MS = 60 * 60 * 1000;
 const COUPON_ID = `brb-referral-${REFERRAL.friendPercent}`;
 
@@ -40,7 +39,6 @@ function billing() {
   }
   return { stripe: requireStripe(), price };
 }
-
 
 async function call<T>(work: (stripe: Stripe) => Promise<T>) {
   try {
@@ -62,7 +60,6 @@ async function call<T>(work: (stripe: Stripe) => Promise<T>) {
 
 const ownerOf = (tenantId: ObjectId) =>
   forTenant(tenantId).users.findOne({ role: "owner" });
-
 
 async function ensureReferralCode(tenant: TenantDoc) {
   if (tenant.referralCode) return tenant.referralCode;

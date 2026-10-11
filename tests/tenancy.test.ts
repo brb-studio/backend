@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
+import { app } from "../src/app";
 import { branches, tenants } from "../src/db/collections";
 import { PLAN_LIMITS } from "../src/features/tenancy/subscription";
 import { api, branchInput, createTenant, createUser } from "./helpers";
@@ -13,6 +14,15 @@ describe("tenant resolution", () => {
     });
     expect(res.status).toBe(404);
     expect(res.body.error?.code).toBe("TENANT_NOT_FOUND");
+  });
+
+  test("X-Tenant-Host wins over X-Forwarded-Host (Vercel rewrites the latter)", async () => {
+    const { tenant, host } = await createTenant();
+    const res = await app.request("/v1/public/tenant", {
+      headers: { "X-Tenant-Host": host, "X-Forwarded-Host": "api.vercel.app" },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { slug: string }).slug).toBe(tenant.slug);
   });
 
   test("public tenant: branding and active branches only, no internal fields", async () => {

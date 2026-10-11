@@ -4,6 +4,8 @@ import { createMiddleware } from "hono/factory";
 import { requestId } from "hono/request-id";
 import { config } from "./config";
 import { db } from "./db/client";
+import { specs } from "./db/collections";
+import { ensureCollections } from "./db/setup";
 import { authenticate, authRoutes, userRoutes } from "./features/auth/routes";
 import {
   publicAvailabilityRoutes,
@@ -70,6 +72,19 @@ const accessLog = createMiddleware<Env>(async (c, next) => {
   );
 });
 
+let setup: Promise<void> | undefined;
+
+export const dbReady = () =>
+  (setup ??= ensureCollections(db, specs).catch((err: unknown) => {
+    setup = undefined;
+    throw err;
+  }));
+
+const ensureDb = createMiddleware<Env>(async (_c, next) => {
+  await dbReady();
+  await next();
+});
+
 export const app = new Hono<Env>()
   .use(
     cors({
@@ -80,13 +95,19 @@ export const app = new Hono<Env>()
           platformDomain: config.PLATFORM_DOMAIN,
         }),
       allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-      allowHeaders: ["Authorization", "Content-Type", "X-Forwarded-Host"],
+      allowHeaders: [
+        "Authorization",
+        "Content-Type",
+        "X-Forwarded-Host",
+        "X-Tenant-Host",
+      ],
       exposeHeaders: ["X-Request-Id"],
       maxAge: 600,
     }),
     requestId(),
     securityHeaders,
     accessLog,
+    ensureDb,
   )
   .get("/health", async (c) => {
     await db.command({ ping: 1 });
@@ -122,3 +143,5 @@ export const app = new Hono<Env>()
   .route("/v1/images", imageRoutes)
   .notFound(notFound)
   .onError(onError);
+
+export default app;

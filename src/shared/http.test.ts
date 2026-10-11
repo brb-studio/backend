@@ -100,8 +100,9 @@ describe("onError", () => {
 describe("clientIp", () => {
   const secret = "s".repeat(32);
   const ipApp = new Hono()
-    .get("/with-secret", (c) => c.text(clientIp(c, secret)))
-    .get("/no-secret", (c) => c.text(clientIp(c, undefined)));
+    .get("/with-secret", (c) => c.text(clientIp(c, secret, false)))
+    .get("/no-secret", (c) => c.text(clientIp(c, undefined, false)))
+    .get("/vercel", (c) => c.text(clientIp(c, secret, true)));
   const ip = async (path: string, headers: Record<string, string>) =>
     (await ipApp.request(path, { headers })).text();
   const forwarded = { "X-Forwarded-For": "6.6.6.6, 203.0.113.7" };
@@ -120,5 +121,23 @@ describe("clientIp", () => {
     expect(
       await ip("/no-secret", { ...forwarded, "X-Proxy-Secret": secret }),
     ).toBe("unknown");
+  });
+
+  test("prefers X-Visitor-IP, which Vercel leaves alone", async () => {
+    expect(
+      await ip("/vercel", {
+        "X-Visitor-IP": "203.0.113.7",
+        "X-Forwarded-For": "76.76.21.21",
+        "X-Proxy-Secret": secret,
+      }),
+    ).toBe("203.0.113.7");
+  });
+
+  test("uses Vercel's caller address only when running on Vercel", async () => {
+    const vercelSet = { "X-Vercel-Forwarded-For": "198.51.100.9" };
+    expect(await ip("/vercel", { ...vercelSet, ...forwarded })).toBe(
+      "198.51.100.9",
+    );
+    expect(await ip("/with-secret", vercelSet)).toBe("unknown");
   });
 });

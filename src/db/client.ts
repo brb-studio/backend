@@ -5,6 +5,8 @@ export const client = new MongoClient(config.MONGO_URL, {
   appName: "magicstudio-backend",
   serverSelectionTimeoutMS: 5_000,
   ignoreUndefined: true,
+  maxPoolSize: 10,
+  maxIdleTimeMS: 60_000,
 });
 
 export const db = client.db(config.MONGO_DB);

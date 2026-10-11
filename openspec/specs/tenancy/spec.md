@@ -6,7 +6,7 @@ Cómo se identifica cada barbería (tenant) a partir del host, qué datos públi
 ## Requirements
 
 ### Requirement: La barbería se resuelve solo por el host
-El sistema SHALL identificar el tenant únicamente a partir del host de la petición (`X-Forwarded-Host`, o `Host` si falta): `<slug>.<PLATFORM_DOMAIN>` o el `customDomain` del tenant, ignorando el puerto. El sistema MUST NOT aceptar un tenant enviado en el cuerpo, la query o los encabezados de la petición; los cuerpos son estrictos y cualquier clave desconocida se rechaza.
+El sistema SHALL identificar el tenant únicamente a partir del host de la petición (`X-Tenant-Host`, si no `X-Forwarded-Host`, si no `Host`; Vercel reescribe `X-Forwarded-Host` con el dominio del API): `<slug>.<PLATFORM_DOMAIN>` o el `customDomain` del tenant, ignorando el puerto. El sistema MUST NOT aceptar un tenant enviado en el cuerpo, la query o los encabezados de la petición; los cuerpos son estrictos y cualquier clave desconocida se rechaza.
 
 #### Scenario: Subdominio de la plataforma
 - **WHEN** llega `X-Forwarded-Host: elite.localhost:3000` con `PLATFORM_DOMAIN=localhost`

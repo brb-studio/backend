@@ -125,7 +125,7 @@ const [tenantOf, branchOf] = await Promise.all([
 
 - Passwords argon2id (`Bun.password`). Sesiones: token aleatorio 256-bit, solo se guarda su SHA-256, TTL de MongoDB las borra. Sesiones tenant (30d, renuevan pasada la mitad) ≠ sesiones platform (12h, colecciones separadas).
 - Rate limits: ventana fija en colección `rateLimits`, un upsert atómico por intento (todas las instancias comparten el conteo). Claves hasheadas SHA-256 (nunca emails/teléfonos en claro).
-- IP del visitante: solo vale `X-Forwarded-For` si viene con `X-Proxy-Secret` (`PROXY_SECRET`, exigido en prod); si no, se usa la IP del socket. El frontend elige la IP según `TRUSTED_PROXY_HOPS`.
+- IP del visitante: solo vale `X-Visitor-IP` (o `X-Forwarded-For`, que Vercel sobrescribe) si viene con `X-Proxy-Secret` (`PROXY_SECRET`, exigido en prod); si no, se usa la IP del socket (en Vercel, `X-Vercel-Forwarded-For`). El frontend elige la IP según `TRUSTED_PROXY_HOPS`.
 - Uploads: tipo leído de los bytes (SVG rechazado), ≤1 MB, cuotas 500/tenant y 60/h por usuario. Push: solo hosts conocidos (anti-SSRF), envío post-commit en chunks de 20.
 
 ## 6. Booking concurrente (transacción)

@@ -19,7 +19,9 @@ import { requireActiveSubscription } from "./subscription";
 
 export const resolveTenant = createMiddleware<Env>(async (c, next) => {
   const tenant = await tenantForHost(
-    c.req.header("X-Forwarded-Host") ?? c.req.header("Host"),
+    c.req.header("X-Tenant-Host") ??
+      c.req.header("X-Forwarded-Host") ??
+      c.req.header("Host"),
   );
   if (!tenant) throw new AppError(404, "TENANT_NOT_FOUND", "Unknown tenant");
   c.set("tenant", tenant);
