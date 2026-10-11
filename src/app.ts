@@ -1,6 +1,8 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { requestId } from "hono/request-id";
+import { config } from "./config";
 import { db } from "./db/client";
 import { authenticate, authRoutes, userRoutes } from "./features/auth/routes";
 import {
@@ -40,6 +42,7 @@ import {
   resolveTenant,
   tenantRoutes,
 } from "./features/tenancy/routes";
+import { corsOrigin } from "./shared/cors";
 import { type Env, notFound, onError } from "./shared/http";
 
 const securityHeaders = createMiddleware<Env>(async (c, next) => {
@@ -68,7 +71,23 @@ const accessLog = createMiddleware<Env>(async (c, next) => {
 });
 
 export const app = new Hono<Env>()
-  .use(requestId(), securityHeaders, accessLog)
+  .use(
+    cors({
+      origin: (origin) =>
+        corsOrigin(origin, {
+          origins: config.CORS_ORIGINS,
+          frontendUrl: config.FRONTEND_URL,
+          platformDomain: config.PLATFORM_DOMAIN,
+        }),
+      allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+      allowHeaders: ["Authorization", "Content-Type", "X-Forwarded-Host"],
+      exposeHeaders: ["X-Request-Id"],
+      maxAge: 600,
+    }),
+    requestId(),
+    securityHeaders,
+    accessLog,
+  )
   .get("/health", async (c) => {
     await db.command({ ping: 1 });
     return c.json({ status: "ok" });

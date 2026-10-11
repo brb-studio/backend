@@ -9,7 +9,6 @@ await ensureCollections(db, specs);
 const server = Bun.serve({
   port: config.PORT,
   fetch: app.fetch,
-  // Image uploads are up to 1 MB; JSON bodies stay capped at 64 KB by readJson.
   maxRequestBodySize: 1024 * 1024 + 64 * 1024,
   idleTimeout: 30,
 });

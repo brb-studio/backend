@@ -40,6 +40,7 @@ const schema = z
       .regex(/^pk_(test|live)_/, "must be a Stripe publishable key")
       .optional(),
     FRONTEND_URL: z.url().optional(),
+    CORS_ORIGINS: z.string().default(""),
     STRIPE_APP_FEE_BPS: z.coerce.number().int().min(0).max(10000).default(0),
     /** The one monthly price barbershops pay for the app. */
     STRIPE_SUBSCRIPTION_PRICE: z

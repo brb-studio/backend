@@ -20,6 +20,7 @@ describe("parseConfig", () => {
       MONGO_URL: local.MONGO_URL,
       MONGO_DB: "brb-studio",
       PLATFORM_DOMAIN: "localhost",
+      CORS_ORIGINS: "",
       STRIPE_APP_FEE_BPS: 0,
     });
   });
