@@ -31,6 +31,8 @@ import {
   stripeStaffRoutes,
   stripeWebhookRoutes,
 } from "./features/payments/routes";
+import { platformRoutes } from "./features/platform/routes";
+import { earningsRoutes } from "./features/platform/tenant-routes";
 import { promotionRoutes } from "./features/promotions/routes";
 import {
   branchRoutes,
@@ -73,6 +75,7 @@ export const app = new Hono<Env>()
   })
   .route("/images", publicImageRoutes)
   .route("/webhooks/stripe", stripeWebhookRoutes)
+  .route("/platform", platformRoutes)
   .use("/v1/*", resolveTenant, authenticate)
   .route("/v1/auth", authRoutes)
   .route("/v1/public", publicRoutes)
@@ -94,6 +97,7 @@ export const app = new Hono<Env>()
   .route("/v1/packages", packageRoutes)
   .route("/v1/availability", staffAvailabilityRoutes)
   .route("/v1/appointments", appointmentRoutes)
+  .route("/v1/earnings", earningsRoutes)
   .route("/v1/promotions", promotionRoutes)
   .route("/v1/notifications", notificationRoutes)
   .route("/v1/images", imageRoutes)

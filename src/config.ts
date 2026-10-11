@@ -21,7 +21,7 @@ const schema = z
     MONGO_DB: z
       .string()
       .regex(/^[A-Za-z0-9_-]{1,63}$/)
-      .default("magicstudio"),
+      .default("brb-studio"),
     PLATFORM_DOMAIN: z
       .string()
       .regex(/^[a-z0-9]+([.-][a-z0-9]+)*$/)

@@ -87,6 +87,12 @@ export const platform = {
   pushSubscriptions: raw.pushSubscriptions,
   images: raw.images,
   appointments: raw.appointments,
+  branches: raw.branches,
+  barbers: raw.barbers,
+  customers: raw.customers,
+  staff: raw.platformStaff,
+  staffSessions: raw.platformSessions,
+  payouts: raw.payouts,
 };
 
 export async function runAll<T>(

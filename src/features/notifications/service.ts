@@ -1,4 +1,4 @@
-import { type ClientSession, ObjectId } from "mongodb";
+import { type ClientSession, ObjectId, type WithId } from "mongodb";
 import { config } from "../../config";
 import {
   type AppointmentDoc,
@@ -11,6 +11,7 @@ import {
   type TenantDb,
   type TenantDoc,
 } from "../../db/scoped";
+import { collect } from "../../shared/cursor";
 import type { Auth } from "../../shared/http";
 import { instantToLocal } from "../../shared/time";
 import {
@@ -101,15 +102,15 @@ export const pushPublicKey = () => vapid?.publicKey;
 const PUSH_CONCURRENCY = 20;
 
 export async function deliverPush(
-  tenant: Pick<TenantDoc, "_id" | "defaultLocale">,
+  tenant: WithId<Pick<TenantDoc, "defaultLocale">>,
   list: NotificationDoc[],
 ) {
   if (!vapid || list.length === 0) return;
   const keys = vapid;
   const t = forTenant(tenant._id);
-  const devices = await t.pushSubscriptions
-    .find({ userId: { $in: list.map((n) => n.userId) } })
-    .toArray();
+  const devices = await collect(
+    t.pushSubscriptions.find({ userId: { $in: list.map((n) => n.userId) } }),
+  );
   const jobs = list.flatMap((n) =>
     devices
       .filter((d) => d.userId.equals(n.userId))
@@ -171,17 +172,19 @@ export async function unsubscribePush(auth: Auth, endpoint: string) {
 export async function listNotifications(auth: Auth) {
   const t = forTenant(auth.tenantId);
   const [items, unread] = await Promise.all([
-    t.notifications
-      .find({ userId: auth.userId })
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .toArray(),
+    collect(
+      t.notifications
+        .find({ userId: auth.userId })
+        .sort({ createdAt: -1 })
+        .limit(50),
+      toNotification,
+    ),
     t.notifications.countDocuments({
       userId: auth.userId,
       readAt: { $exists: false },
     }),
   ]);
-  return { unread, items: items.map(toNotification) };
+  return { unread, items };
 }
 
 export async function markRead(auth: Auth, ids?: ObjectId[]) {

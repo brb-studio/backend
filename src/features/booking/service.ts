@@ -1,4 +1,9 @@
-import { type ClientSession, type Filter, ObjectId } from "mongodb";
+import {
+  type ClientSession,
+  type Filter,
+  ObjectId,
+  type WithId,
+} from "mongodb";
 import type * as z from "zod";
 import { hit } from "../../db/rate-limit";
 import {
@@ -12,6 +17,7 @@ import {
   type TenantDoc,
   transaction,
 } from "../../db/scoped";
+import { collect, mapBy } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { instantToLocal } from "../../shared/time";
@@ -30,6 +36,7 @@ import { canServe, type Request } from "../catalog/rules";
 import { resolveRequest } from "../catalog/service";
 import { deliverPush, notifyBarber } from "../notifications/service";
 import { paymentsEnabled, requireStripe } from "../payments/stripe";
+import { resolveCommission } from "../platform/commission";
 import { priceFor, redeem, release } from "../promotions/service";
 import { getBranch } from "../tenancy/service";
 import { customerForGuest, customerForUser, findCustomer } from "./customers";
@@ -453,11 +460,12 @@ export async function listMine(tenant: TenantDoc, auth: Auth) {
   const t = forTenant(tenant._id);
   const customer = await findCustomer(t, { userId: auth.userId });
   if (!customer) return [];
-  const list = await t.appointments
-    .find({ customerId: customer._id })
-    .sort({ startAt: -1 })
-    .limit(50)
-    .toArray();
+  const list = await collect(
+    t.appointments
+      .find({ customerId: customer._id })
+      .sort({ startAt: -1 })
+      .limit(50),
+  );
   const { branchOf, barberOf } = await lookups(t, list);
   const now = Date.now();
   return list.map((a) =>
@@ -637,11 +645,9 @@ export async function listAppointments(
     ...(range.branchId ? [{ branchId: range.branchId }] : []),
     ...(range.barberId ? [{ barberId: range.barberId }] : []),
   ];
-  const list = await t.appointments
-    .find({ $and: clauses })
-    .sort({ startAt: 1 })
-    .limit(1000)
-    .toArray();
+  const list = await collect(
+    t.appointments.find({ $and: clauses }).sort({ startAt: 1 }).limit(1000),
+  );
   return staffViews(t, list);
 }
 
@@ -789,9 +795,29 @@ export async function updateAppointment(
     if (appointment.startAt.getTime() > Date.now()) {
       throw new AppError(409, "NOT_STARTED", "It hasn't started yet");
     }
+    // Completing freezes the barber's commission, so a later rate change can't rewrite what was earned.
+    const barber =
+      input.status === "completed"
+        ? await t.barbers.findOne({ _id: appointment.barberId })
+        : null;
+    const commission = resolveCommission(
+      { ...appointment, status: input.status },
+      barber?.commissionBps,
+    );
     const result = await t.appointments.updateOne(
       { _id: id, status: "confirmed" },
-      { $set: { status: input.status, updatedAt: new Date() } },
+      {
+        $set: {
+          status: input.status,
+          ...(commission && {
+            commission: {
+              bps: commission.bps,
+              amountMinor: commission.amountMinor,
+            },
+          }),
+          updatedAt: new Date(),
+        },
+      },
     );
     if (result.modifiedCount === 0) throw notConfirmed();
   } else if (input.startAt || input.barberId) {
@@ -806,25 +832,38 @@ export async function updateAppointment(
   return getAppointment(auth, id);
 }
 
+/** What an appointment view shows of its branch and barber (and the cancel notice customers get). */
+type ViewBranch = WithId<Pick<BranchDoc, "slug" | "name" | "booking">>;
+type ViewBarber = WithId<Pick<BarberDoc, "slug" | "name">>;
+
 async function lookups(t: TenantDb, list: AppointmentDoc[]) {
   const ids = (pick: (a: AppointmentDoc) => ObjectId) => [
     ...new Map(list.map((a) => [pick(a).toHexString(), pick(a)])).values(),
   ];
   const [branches, barbers] = await Promise.all([
-    t.branches.find({ _id: { $in: ids((a) => a.branchId) } }).toArray(),
-    t.barbers.find({ _id: { $in: ids((a) => a.barberId) } }).toArray(),
+    mapBy(
+      t.branches
+        .find({ _id: { $in: ids((a) => a.branchId) } })
+        .project<ViewBranch>({ slug: 1, name: 1, booking: 1 }),
+      (b) => b._id.toHexString(),
+    ),
+    mapBy(
+      t.barbers
+        .find({ _id: { $in: ids((a) => a.barberId) } })
+        .project<ViewBarber>({ slug: 1, name: 1 }),
+      (b) => b._id.toHexString(),
+    ),
   ]);
-  const byId = <T extends { _id: ObjectId }>(docs: T[]) => {
-    const map = new Map(docs.map((d) => [d._id.toHexString(), d]));
-    return (id: ObjectId) => map.get(id.toHexString());
+  return {
+    branchOf: (id: ObjectId) => branches.get(id.toHexString()),
+    barberOf: (id: ObjectId) => barbers.get(id.toHexString()),
   };
-  return { branchOf: byId(branches), barberOf: byId(barbers) };
 }
 
 function baseView(
   a: AppointmentDoc,
-  branch: BranchDoc | undefined,
-  barber: BarberDoc | undefined,
+  branch: ViewBranch | undefined,
+  barber: ViewBarber | undefined,
 ) {
   return {
     id: a._id.toHexString(),
@@ -879,8 +918,8 @@ function baseView(
 
 function customerView(
   a: AppointmentDoc,
-  branch: BranchDoc | undefined,
-  barber: BarberDoc | undefined,
+  branch: ViewBranch | undefined,
+  barber: ViewBarber | undefined,
   now: number,
 ) {
   const notice = (branch?.booking.cancelNoticeMin ?? 0) * 60_000;
@@ -892,11 +931,19 @@ function customerView(
 }
 
 async function staffViews(t: TenantDb, list: AppointmentDoc[]) {
-  const [{ branchOf, barberOf }, people] = await Promise.all([
+  const [{ branchOf, barberOf }, personOf] = await Promise.all([
     lookups(t, list),
-    t.customers.find({ _id: { $in: list.map((a) => a.customerId) } }).toArray(),
+    mapBy(
+      t.customers
+        .find({ _id: { $in: list.map((a) => a.customerId) } })
+        .project<WithId<Pick<CustomerDoc, "name" | "phone" | "email">>>({
+          name: 1,
+          phone: 1,
+          email: 1,
+        }),
+      (c) => c._id.toHexString(),
+    ),
   ]);
-  const personOf = new Map(people.map((c) => [c._id.toHexString(), c]));
   return list.map((a) => {
     const customer = personOf.get(a.customerId.toHexString());
     return {

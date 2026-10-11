@@ -1,4 +1,4 @@
-import type { ObjectId } from "mongodb";
+import type { ObjectId, WithId } from "mongodb";
 import type { BarberDoc, PackageDoc, ServiceDoc } from "../../db/scoped";
 
 export const fitsBranch = (item: { branchId?: ObjectId }, branchId: ObjectId) =>
@@ -6,7 +6,7 @@ export const fitsBranch = (item: { branchId?: ObjectId }, branchId: ObjectId) =>
 
 export function offers(
   barber: Pick<BarberDoc, "branchId" | "serviceIds" | "active">,
-  services: Pick<ServiceDoc, "_id" | "branchId" | "active">[],
+  services: WithId<Pick<ServiceDoc, "branchId" | "active">>[],
 ) {
   return (
     barber.active &&

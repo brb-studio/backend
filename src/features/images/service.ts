@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Binary } from "mongodb";
 import { hit } from "../../db/rate-limit";
-import { forTenant, platform } from "../../db/scoped";
+import { forTenant, type ImageDoc, platform } from "../../db/scoped";
 import { AppError, type Auth } from "../../shared/http";
 
 export const MAX_IMAGE_BYTES = 1024 * 1024;
@@ -58,7 +58,7 @@ export async function uploadImage(auth: Auth, bytes: Uint8Array) {
 
 /** Photos are public (they're on the shop's pages), looked up by their unguessable id alone. */
 export const findImage = (id: string) =>
-  platform.images.findOne(
+  platform.images.findOne<Pick<ImageDoc, "contentType" | "data">>(
     { _id: id },
     { projection: { contentType: 1, data: 1 } },
   );

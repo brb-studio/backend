@@ -7,6 +7,7 @@ import {
   runAll,
   type TenantDb,
 } from "../../db/scoped";
+import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { evaluate, type Rejection } from "./rules";
 import type { promotionCreate, promotionUpdate } from "./schemas";
@@ -68,7 +69,7 @@ const codeTaken = (err: unknown) =>
     : err;
 
 export const listPromotions = (auth: Auth) =>
-  forTenant(auth.tenantId).promotions.find().sort({ createdAt: -1 }).toArray();
+  collect(forTenant(auth.tenantId).promotions.find().sort({ createdAt: -1 }));
 
 export async function getPromotion(auth: Auth, id: ObjectId) {
   const promo = await forTenant(auth.tenantId).promotions.findOne({ _id: id });
@@ -162,11 +163,14 @@ export async function priceFor(
     discountMinor: 0,
     totalMinor: input.subtotalMinor,
   };
-  const candidates = input.code
-    ? await t.promotions.find({ code: input.code }, { session }).toArray()
-    : await t.promotions
-        .find({ active: true, code: { $exists: false } }, { session })
-        .toArray();
+  const candidates = await collect(
+    input.code
+      ? t.promotions.find({ code: input.code }, { session })
+      : t.promotions.find(
+          { active: true, code: { $exists: false } },
+          { session },
+        ),
+  );
   if (input.code && candidates.length === 0) {
     return { ...full, rejected: "unknown_code" };
   }

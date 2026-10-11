@@ -1,7 +1,4 @@
-// Demo data for development and end-to-end tests: two barbershops with staff and customer accounts.
-//   bun run seed            adds whichever demo tenant is missing
-//   bun run seed --reset    wipes the database first (only *_test or *_e2e databases)
-// Every demo account uses DEMO_PASSWORD. Refuses to run with NODE_ENV=production.
+
 import { parseArgs } from "node:util";
 import { ObjectId } from "mongodb";
 import { config } from "../src/config";

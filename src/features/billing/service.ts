@@ -23,10 +23,6 @@ import {
 } from "./rules";
 import type { checkoutInput } from "./schemas";
 
-/**
- * Subscriptions: the barbershop pays us, on the platform's own Stripe account (Stripe Billing).
- * Appointment payments (features/payments) are the opposite direction, on each barbershop's Connect account.
- */
 
 const HOUR_MS = 60 * 60 * 1000;
 const COUPON_ID = `brb-referral-${REFERRAL.friendPercent}`;
@@ -45,7 +41,7 @@ function billing() {
   return { stripe: requireStripe(), price };
 }
 
-/** Stripe failures become one 502: the owner can retry, Stripe retries webhooks on its own. */
+
 async function call<T>(work: (stripe: Stripe) => Promise<T>) {
   try {
     return await work(billing().stripe);
@@ -67,9 +63,7 @@ async function call<T>(work: (stripe: Stripe) => Promise<T>) {
 const ownerOf = (tenantId: ObjectId) =>
   forTenant(tenantId).users.findOne({ role: "owner" });
 
-// ---------- summary and referral code ----------
 
-/** Only a barbershop that has paid at least once gets a code to share. Created on first look. */
 async function ensureReferralCode(tenant: TenantDoc) {
   if (tenant.referralCode) return tenant.referralCode;
   if (!tenant.billing?.firstPaidAt) return undefined;
@@ -113,25 +107,20 @@ function subscriptionPriceInfo() {
 export async function billingSummary(tenant: TenantDoc) {
   const code = await ensureReferralCode(tenant);
   const price = subscriptionPrice() ? await subscriptionPriceInfo() : null;
-  const [stats] = await platform.referrals
-    .aggregate<{ referred: number; rewarded: number; earnedMinor: number }>([
-      { $match: { referrerTenantId: tenant._id } },
-      {
-        $group: {
-          _id: null,
-          referred: { $sum: 1 },
-          rewarded: {
-            $sum: { $cond: [{ $eq: ["$status", "rewarded"] }, 1, 0] },
-          },
-          earnedMinor: {
-            $sum: {
-              $cond: [{ $eq: ["$status", "rewarded"] }, "$rewardMinor", 0],
-            },
-          },
-        },
-      },
-    ])
-    .toArray();
+  const stats = { referred: 0, rewarded: 0, earnedMinor: 0 };
+  const referrals = platform.referrals
+    .find({ referrerTenantId: tenant._id })
+    .project<Pick<ReferralDoc, "status" | "rewardMinor">>({
+      status: 1,
+      rewardMinor: 1,
+    });
+  for await (const referral of referrals) {
+    stats.referred++;
+    if (referral.status === "rewarded") {
+      stats.rewarded++;
+      stats.earnedMinor += referral.rewardMinor;
+    }
+  }
   const customerId = tenant.billing?.stripeCustomerId;
   const customer =
     customerId &&
@@ -140,14 +129,12 @@ export async function billingSummary(tenant: TenantDoc) {
     refereeTenantId: tenant._id,
   });
   return {
-    /** `null` when subscriptions aren't configured on this server. */
     price,
     plan: tenant.subscription.plan,
     status: tenant.subscription.status,
     currentPeriodEnd: tenant.subscription.currentPeriodEnd,
     cancelAt: tenant.billing?.cancelAt,
     subscribed: hasLiveSubscription(tenant),
-    // Stripe keeps credit as a negative balance and spends it on the next invoices by itself.
     creditMinor:
       customer && !customer.deleted ? Math.max(0, -customer.balance) : 0,
     referral: {
@@ -164,10 +151,6 @@ export async function billingSummary(tenant: TenantDoc) {
   };
 }
 
-/**
- * A code works once per barbershop, on its first paid month, and never for itself (same tenant or same
- * owner email). Brute force is pointless (40-bit codes) but still capped.
- */
 export async function checkReferral(tenant: TenantDoc, code: string) {
   if (!(await hit(`referral:${tenant._id}`, 20, HOUR_MS))) {
     throw new AppError(

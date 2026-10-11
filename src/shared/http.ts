@@ -22,6 +22,8 @@ export type Env = {
   Variables: RequestIdVariables & {
     tenant: TenantDoc;
     auth?: Auth;
+    /** Set on /platform routes only: the signed-in platform staff member. */
+    platformStaffId?: ObjectId;
   };
 };
 

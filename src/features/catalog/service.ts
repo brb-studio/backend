@@ -1,11 +1,14 @@
 import { type Filter, ObjectId } from "mongodb";
 import type * as z from "zod";
 import {
+  type BarberDoc,
+  type BranchDoc,
   forTenant,
   type PackageDoc,
   type ServiceDoc,
   type TenantDoc,
 } from "../../db/scoped";
+import { collect } from "../../shared/cursor";
 import { AppError, type Auth, duplicateKeys } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { visibleBranchIds } from "../auth/policy";
@@ -49,9 +52,9 @@ export async function servicesFor(
   path: string,
   { active = false } = {},
 ) {
-  const found = await forTenant(tenantId)
-    .services.find({ _id: { $in: ids } })
-    .toArray();
+  const found = await collect(
+    forTenant(tenantId).services.find({ _id: { $in: ids } }),
+  );
   const list = packageServices(
     { items: ids.map((serviceId) => ({ serviceId })) },
     found,
@@ -72,10 +75,11 @@ export async function servicesFor(
 }
 
 export const listServices = (auth: Auth) =>
-  forTenant(auth.tenantId)
-    .services.find(visibleTo<ServiceDoc>(auth))
-    .sort(ORDER)
-    .toArray();
+  collect(
+    forTenant(auth.tenantId)
+      .services.find(visibleTo<ServiceDoc>(auth))
+      .sort(ORDER),
+  );
 
 export async function getService(auth: Auth, id: ObjectId) {
   const service = await forTenant(auth.tenantId).services.findOne({
@@ -131,17 +135,18 @@ export async function updateService(
 
 async function withTotals(tenantId: ObjectId, pkgs: PackageDoc[]) {
   const ids = pkgs.flatMap((p) => p.items.map((item) => item.serviceId));
-  const services = await forTenant(tenantId)
-    .services.find({ _id: { $in: ids } })
-    .toArray();
+  const services = await collect(
+    forTenant(tenantId).services.find({ _id: { $in: ids } }),
+  );
   return pkgs.map((p) => toPackage(p, packageServices(p, services)));
 }
 
 export async function listPackages(auth: Auth) {
-  const pkgs = await forTenant(auth.tenantId)
-    .packages.find(visibleTo<PackageDoc>(auth))
-    .sort(ORDER)
-    .toArray();
+  const pkgs = await collect(
+    forTenant(auth.tenantId)
+      .packages.find(visibleTo<PackageDoc>(auth))
+      .sort(ORDER),
+  );
   return withTotals(auth.tenantId, pkgs);
 }
 
@@ -222,16 +227,26 @@ export async function updatePackage(
 
 export async function publicCatalog(tenant: TenantDoc, branchSlug?: string) {
   const t = forTenant(tenant._id);
-  const branches = await t.branches
-    .find({ active: true, ...(branchSlug && { slug: branchSlug }) })
-    .toArray();
-  if (branchSlug && branches.length === 0) throw notFound();
+  const branchIds = await collect(
+    t.branches
+      .find({ active: true, ...(branchSlug && { slug: branchSlug }) })
+      .project<Pick<BranchDoc, "_id">>({ _id: 1 }),
+    (b) => b._id,
+  );
+  if (branchSlug && branchIds.length === 0) throw notFound();
   const [barbers, services, pkgs] = await Promise.all([
-    t.barbers
-      .find({ active: true, branchId: { $in: branches.map((b) => b._id) } })
-      .toArray(),
-    t.services.find({ active: true }).sort(ORDER).toArray(),
-    t.packages.find({ active: true }).sort(ORDER).toArray(),
+    // Only what decides who can do what; no hours, photos or bios of every barber.
+    collect(
+      t.barbers
+        .find({ active: true, branchId: { $in: branchIds } })
+        .project<Pick<BarberDoc, "branchId" | "serviceIds" | "active">>({
+          branchId: 1,
+          serviceIds: 1,
+          active: 1,
+        }),
+    ),
+    collect(t.services.find({ active: true }).sort(ORDER)),
+    collect(t.packages.find({ active: true }).sort(ORDER)),
   ]);
   return {
     currency: tenant.currency,
@@ -278,12 +293,12 @@ export async function resolveRequest(
   const services = pkg
     ? packageServices(
         pkg,
-        await t.services
-          .find({
+        await collect(
+          t.services.find({
             _id: { $in: pkg.items.map((i) => i.serviceId) },
             active: true,
-          })
-          .toArray(),
+          }),
+        ),
       )
     : null;
   if (!pkg || !services) throw notFound();

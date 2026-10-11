@@ -1,11 +1,14 @@
 import type { ClientSession, ObjectId } from "mongodb";
 import {
+  type AppointmentDoc,
   type BarberDoc,
   type BranchDoc,
   forTenant,
   type TenantDb,
   type TenantDoc,
+  type TimeOffDoc,
 } from "../../db/scoped";
+import { collect } from "../../shared/cursor";
 import { AppError, type Auth } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { ownBarberId } from "../barbers/service";
@@ -68,36 +71,50 @@ export async function scheduleOf(
 ) {
   const { session } = options;
   const findOff = () =>
-    t.timeOff
-      .find(
-        {
-          branchId: branch._id,
-          startAt: { $lt: new Date(span.end) },
-          endAt: { $gt: new Date(span.start) },
-          $or: [
-            { barberId: { $in: barberIds } },
-            { barberId: { $exists: false } },
-          ],
-        },
-        { session, projection: { barberId: 1, startAt: 1, endAt: 1 } },
-      )
-      .toArray();
-  const findBooked = () =>
-    t.appointments
-      .find(
-        {
-          barberId: { $in: barberIds },
-          status: "confirmed",
-          startAt: {
-            $gte: new Date(span.start - DAY_MS),
-            $lt: new Date(span.end),
+    collect(
+      t.timeOff
+        .find(
+          {
+            branchId: branch._id,
+            startAt: { $lt: new Date(span.end) },
+            endAt: { $gt: new Date(span.start) },
+            $or: [
+              { barberId: { $in: barberIds } },
+              { barberId: { $exists: false } },
+            ],
           },
-          blockedUntil: { $gt: new Date(span.start) },
-          ...(options.except && { _id: { $ne: options.except } }),
-        },
-        { session, projection: { barberId: 1, startAt: 1, blockedUntil: 1 } },
-      )
-      .toArray();
+          { session },
+        )
+        .project<Pick<TimeOffDoc, "barberId" | "startAt" | "endAt">>({
+          barberId: 1,
+          startAt: 1,
+          endAt: 1,
+        }),
+    );
+  const findBooked = () =>
+    collect(
+      t.appointments
+        .find(
+          {
+            barberId: { $in: barberIds },
+            status: "confirmed",
+            startAt: {
+              $gte: new Date(span.start - DAY_MS),
+              $lt: new Date(span.end),
+            },
+            blockedUntil: { $gt: new Date(span.start) },
+            ...(options.except && { _id: { $ne: options.except } }),
+          },
+          { session },
+        )
+        .project<Pick<AppointmentDoc, "barberId" | "startAt" | "blockedUntil">>(
+          {
+            barberId: 1,
+            startAt: 1,
+            blockedUntil: 1,
+          },
+        ),
+    );
   const [off, booked] = session
     ? [await findOff(), await findBooked()]
     : await Promise.all([findOff(), findBooked()]);
@@ -114,9 +131,34 @@ export async function scheduleOf(
   });
 }
 
+/** What the free-slot calculation and the public list read of a barber: not bios, specialties or lock counters. */
+export type SlotBarber = Pick<
+  BarberDoc,
+  | "_id"
+  | "slug"
+  | "name"
+  | "image"
+  | "images"
+  | "hours"
+  | "serviceIds"
+  | "branchId"
+  | "active"
+>;
+
+const SLOT_BARBER_FIELDS = {
+  slug: 1,
+  name: 1,
+  image: 1,
+  images: 1,
+  hours: 1,
+  serviceIds: 1,
+  branchId: 1,
+  active: 1,
+} as const;
+
 export const engineInput = (
   branch: BranchDoc,
-  barber: BarberDoc,
+  barber: Pick<BarberDoc, "hours">,
   durationMin: number,
   earliest: number,
   schedule: Pick<EngineInput, "blocks" | "busy">,
@@ -135,7 +177,7 @@ async function availability(
   t: TenantDb,
   branch: BranchDoc,
   request: Request,
-  barbers: BarberDoc[],
+  barbers: SlotBarber[],
   options: {
     now: number;
     earliest: number;
@@ -209,14 +251,16 @@ export async function publicAvailability(
     resolveRequest(tenant._id, query),
   ]);
   if (!branch) throw notFound();
-  const barbers = await t.barbers
-    .find({
-      branchId: branch._id,
-      active: true,
-      ...(query.barber && { slug: query.barber }),
-    })
-    .sort({ name: 1 })
-    .toArray();
+  const barbers = await collect(
+    t.barbers
+      .find({
+        branchId: branch._id,
+        active: true,
+        ...(query.barber && { slug: query.barber }),
+      })
+      .sort({ name: 1 })
+      .project<SlotBarber>(SLOT_BARBER_FIELDS),
+  );
   if (query.barber && !barbers.some((b) => canServe(b, request)))
     throw notFound();
   return availability(t, branch, request, barbers, {
@@ -252,15 +296,17 @@ export async function staffAvailability(
       earliest: now,
       windowDays: STAFF_WINDOW_DAYS,
     });
-  const barbers = await t.barbers
-    .find({
-      branchId: branch._id,
-      active: true,
-      ...(query.barberId && { _id: query.barberId }),
-      ...(own && { _id: own }),
-    })
-    .sort({ name: 1 })
-    .toArray();
+  const barbers = await collect(
+    t.barbers
+      .find({
+        branchId: branch._id,
+        active: true,
+        ...(query.barberId && { _id: query.barberId }),
+        ...(own && { _id: own }),
+      })
+      .sort({ name: 1 })
+      .project<SlotBarber>(SLOT_BARBER_FIELDS),
+  );
   return availability(t, branch, request, barbers, {
     now,
     earliest: now,

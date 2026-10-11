@@ -7,11 +7,10 @@ export type CollectionSpec = {
 };
 
 export async function ensureCollections(db: Db, specs: CollectionSpec[]) {
-  const existing = new Set(
-    (await db.listCollections({}, { nameOnly: true }).toArray()).map(
-      (collection) => collection.name,
-    ),
-  );
+  const existing = new Set<string>();
+  for await (const { name } of db.listCollections({}, { nameOnly: true })) {
+    existing.add(name);
+  }
   for (const { name, validator, indexes } of specs) {
     const options = {
       validator,

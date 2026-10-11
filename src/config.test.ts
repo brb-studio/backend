@@ -18,7 +18,7 @@ describe("parseConfig", () => {
       NODE_ENV: "development",
       PORT: 4000,
       MONGO_URL: local.MONGO_URL,
-      MONGO_DB: "magicstudio",
+      MONGO_DB: "brb-studio",
       PLATFORM_DOMAIN: "localhost",
       STRIPE_APP_FEE_BPS: 0,
     });
@@ -68,7 +68,7 @@ describe("parseConfig", () => {
 
   test("tests can only use a *_test database", () => {
     expect(
-      errorOf({ NODE_ENV: "test", ...local, MONGO_DB: "magicstudio" }),
+      errorOf({ NODE_ENV: "test", ...local, MONGO_DB: "brb-studio" }),
     ).toContain("MONGO_DB: tests must use a *_test database");
   });
 

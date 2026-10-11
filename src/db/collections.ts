@@ -134,6 +134,8 @@ export type BarberDoc = {
   images?: string[];
   hours: Hours[];
   serviceIds: ObjectId[];
+  /** Commission in basis points (1000 = 10%) of each completed appointment's total. Unset = not configured. */
+  commissionBps?: number;
   active: boolean;
   lockVersion?: number;
   createdAt: Date;
@@ -289,6 +291,10 @@ export type AppointmentDoc = {
     applicationFeeMinor?: number;
     paidAt?: Date;
   };
+  /** Frozen when the appointment is completed (or its commission is paid) so later rate changes can't rewrite history. */
+  commission?: { bps: number; amountMinor: number };
+  /** The payout that settled this appointment's commission; set together with the payout, never alone. */
+  payoutId?: ObjectId;
   notes?: string;
   source: "online" | "staff";
   createdBy?: ObjectId;
@@ -373,6 +379,43 @@ export type PushSubscriptionDoc = {
 
 export const pushSubscriptions =
   db.collection<PushSubscriptionDoc>("pushSubscriptions");
+
+/** Platform staff work across every barbershop; they live outside any tenant. */
+export type PlatformStaffDoc = {
+  _id: ObjectId;
+  email: string;
+  name: string;
+  passwordHash: string;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type PlatformSessionDoc = {
+  _id: string;
+  staffId: ObjectId;
+  expiresAt: Date;
+  createdAt: Date;
+};
+
+/** A commission payment to a barber, settling whole appointments (each one in at most one payout). */
+export type PayoutDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  barberId: ObjectId;
+  currency: string;
+  amountMinor: number;
+  appointmentIds: ObjectId[];
+  reference?: string;
+  paidAt: Date;
+  createdBy: ObjectId;
+  createdAt: Date;
+};
+
+export const platformStaff = db.collection<PlatformStaffDoc>("platformStaff");
+export const platformSessions =
+  db.collection<PlatformSessionDoc>("platformSessions");
+export const payouts = db.collection<PayoutDoc>("payouts");
 
 const string = (extra: Document = {}) => ({ bsonType: "string", ...extra });
 const int = (minimum: number, maximum: number) => ({
@@ -581,6 +624,8 @@ export const specs: CollectionSpec[] = [
         name: "tenant_email_unique",
         unique: true,
       },
+      // The staff list (role ≠ customer) must not scan every customer account of the barbershop.
+      { key: { tenantId: 1, role: 1 }, name: "tenant_role" },
     ],
   },
   {
@@ -638,6 +683,7 @@ export const specs: CollectionSpec[] = [
           images: { bsonType: "array", maxItems: 12, items: string() },
           hours,
           serviceIds: { bsonType: "array", items: objectId },
+          commissionBps: int(0, 10_000),
           lockVersion: { bsonType: ["int", "long"] },
           active: bool,
           ...timestamps,
@@ -866,6 +912,11 @@ export const specs: CollectionSpec[] = [
             applicationFeeMinor: int(0, 100_000_000),
             paidAt: date,
           }),
+          commission: object(["bps", "amountMinor"], {
+            bps: int(0, 10_000),
+            amountMinor: int(0, 100_000_000),
+          }),
+          payoutId: objectId,
           source: oneOf(["online", "staff"]),
           ...timestamps,
         },
@@ -904,6 +955,10 @@ export const specs: CollectionSpec[] = [
         name: "payment_intent",
         sparse: true,
       },
+      // Barber agenda and earnings read one barber over a range of days, across every status.
+      { key: { barberId: 1, startAt: 1 }, name: "barber_start" },
+      // Platform reports across barbershops (no tenant in the filter).
+      { key: { startAt: 1 }, name: "start" },
     ],
   },
   {
@@ -1061,6 +1116,71 @@ export const specs: CollectionSpec[] = [
     indexes: [
       { key: { refereeTenantId: 1 }, name: "referee_unique", unique: true },
       { key: { referrerTenantId: 1 }, name: "referrer" },
+    ],
+  },
+  {
+    name: "platformStaff",
+    validator: {
+      $jsonSchema: object(
+        ["email", "name", "passwordHash", "active", "createdAt", "updatedAt"],
+        {
+          email: string(),
+          name: string(),
+          passwordHash: string(),
+          active: bool,
+          ...timestamps,
+        },
+      ),
+    },
+    indexes: [{ key: { email: 1 }, name: "email_unique", unique: true }],
+  },
+  {
+    name: "platformSessions",
+    validator: {
+      $jsonSchema: object(["staffId", "expiresAt", "createdAt"], {
+        staffId: objectId,
+        expiresAt: date,
+        createdAt: date,
+      }),
+    },
+    indexes: [
+      { key: { expiresAt: 1 }, name: "expiresAt_ttl", expireAfterSeconds: 0 },
+    ],
+  },
+  {
+    name: "payouts",
+    validator: {
+      $jsonSchema: object(
+        [
+          "tenantId",
+          "barberId",
+          "currency",
+          "amountMinor",
+          "appointmentIds",
+          "paidAt",
+          "createdBy",
+          "createdAt",
+        ],
+        {
+          tenantId: objectId,
+          barberId: objectId,
+          currency: string({ pattern: "^[A-Z]{3}$" }),
+          amountMinor: int(0, 1_000_000_000),
+          appointmentIds: { bsonType: "array", minItems: 1, items: objectId },
+          reference: string({ maxLength: 120 }),
+          paidAt: date,
+          createdBy: objectId,
+          createdAt: date,
+        },
+      ),
+    },
+    indexes: [
+      // An appointment's commission is settled by at most one payout: the database refuses a second.
+      {
+        key: { appointmentIds: 1 },
+        name: "appointment_once",
+        unique: true,
+      },
     ],
   },
 ];

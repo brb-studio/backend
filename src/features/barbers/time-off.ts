@@ -1,6 +1,14 @@
-import { type Filter, ObjectId } from "mongodb";
+import { type Filter, ObjectId, type WithId } from "mongodb";
 import type * as z from "zod";
-import { forTenant, type TimeOffDoc, transaction } from "../../db/scoped";
+import {
+  type AppointmentDoc,
+  type BarberDoc,
+  type BranchDoc,
+  forTenant,
+  type TimeOffDoc,
+  transaction,
+} from "../../db/scoped";
+import { collect, mapBy } from "../../shared/cursor";
 import { AppError, type Auth } from "../../shared/http";
 import { instantToLocal, localToInstant } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
@@ -50,32 +58,39 @@ export async function createTimeOff(
   }
   const t = forTenant(auth.tenantId);
   await transaction(async (session) => {
-    const locked = barber
-      ? [barber._id]
-      : (
-          await t.barbers
-            .find({ branchId: branch._id }, { session, projection: { _id: 1 } })
-            .toArray()
-        ).map((b) => b._id);
-    for (const id of locked) {
+    // Bump each barber's lock as it is read: no list of ids is held.
+    if (barber) {
       await t.barbers.updateOne(
-        { _id: id },
+        { _id: barber._id },
         { $inc: { lockVersion: 1 } },
         { session },
       );
+    } else {
+      const ids = t.barbers
+        .find({ branchId: branch._id }, { session })
+        .project<Pick<BarberDoc, "_id">>({ _id: 1 });
+      for await (const { _id } of ids) {
+        await t.barbers.updateOne(
+          { _id },
+          { $inc: { lockVersion: 1 } },
+          { session },
+        );
+      }
     }
-    const clashes = await t.appointments
-      .find(
-        {
-          branchId: branch._id,
-          status: "confirmed",
-          startAt: { $lt: entry.endAt },
-          endAt: { $gt: entry.startAt },
-          ...(barber && { barberId: barber._id }),
-        },
-        { session, limit: 20, projection: { startAt: 1 } },
-      )
-      .toArray();
+    const clashes = await collect(
+      t.appointments
+        .find(
+          {
+            branchId: branch._id,
+            status: "confirmed",
+            startAt: { $lt: entry.endAt },
+            endAt: { $gt: entry.startAt },
+            ...(barber && { barberId: barber._id }),
+          },
+          { session, limit: 20 },
+        )
+        .project<WithId<Pick<AppointmentDoc, "startAt">>>({ startAt: 1 }),
+    );
     if (clashes.length > 0) {
       throw new AppError(
         409,
@@ -112,16 +127,15 @@ export async function listTimeOff(
       ],
     });
   }
-  const entries = await t.timeOff
-    .find({ $and: clauses })
-    .sort({ startAt: 1 })
-    .limit(500)
-    .toArray();
-  const branches = await t.branches
-    .find({ _id: { $in: [...new Set(entries.map((e) => e.branchId))] } })
-    .toArray();
-  const zoneOf = new Map(
-    branches.map((b) => [b._id.toHexString(), b.timeZone]),
+  const entries = await collect(
+    t.timeOff.find({ $and: clauses }).sort({ startAt: 1 }).limit(500),
+  );
+  const zoneOf = await mapBy(
+    t.branches
+      .find({ _id: { $in: [...new Set(entries.map((e) => e.branchId))] } })
+      .project<WithId<Pick<BranchDoc, "timeZone">>>({ timeZone: 1 }),
+    (b) => b._id.toHexString(),
+    (b) => b.timeZone,
   );
   return entries.map((e) =>
     toTimeOff(e, zoneOf.get(e.branchId.toHexString()) ?? "UTC"),

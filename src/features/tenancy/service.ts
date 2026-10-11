@@ -7,6 +7,7 @@ import {
   platform,
   type TenantDoc,
 } from "../../db/scoped";
+import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { isTenantWide, visibleBranchIds } from "../auth/policy";
@@ -60,10 +61,9 @@ const visibleTo = (auth: Auth): Filter<BranchDoc> => {
 };
 
 export const listBranches = (auth: Auth) =>
-  forTenant(auth.tenantId)
-    .branches.find(visibleTo(auth))
-    .sort({ name: 1 })
-    .toArray();
+  collect(
+    forTenant(auth.tenantId).branches.find(visibleTo(auth)).sort({ name: 1 }),
+  );
 
 export async function getBranch(auth: Auth, id: ObjectId) {
   const branch = await forTenant(auth.tenantId).branches.findOne({
@@ -147,10 +147,9 @@ export async function updateBranch(
 }
 
 export async function publicTenant(tenant: TenantDoc) {
-  const branches = await forTenant(tenant._id)
-    .branches.find({ active: true })
-    .sort({ name: 1 })
-    .toArray();
+  const branches = await collect(
+    forTenant(tenant._id).branches.find({ active: true }).sort({ name: 1 }),
+  );
   return {
     slug: tenant.slug,
     name: tenant.name,

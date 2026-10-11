@@ -1,4 +1,4 @@
-import { ObjectId } from "mongodb";
+import { ObjectId, type WithId } from "mongodb";
 import { hit } from "../../db/rate-limit";
 import { forTenant, platform, type UserDoc } from "../../db/scoped";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
@@ -16,7 +16,7 @@ export const randomToken = (bytes: number) =>
   );
 
 export async function createSession(
-  user: Pick<UserDoc, "_id" | "tenantId">,
+  user: WithId<Pick<UserDoc, "tenantId">>,
   now = new Date(),
 ) {
   const token = randomToken(32);

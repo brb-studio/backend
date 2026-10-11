@@ -37,6 +37,7 @@ bun run dev        # http://localhost:4000/health
 | `bun run audit` | Fails on high/critical advisories |
 | `bun run tenant:create --slug … --name … --plan trial\|basic\|pro\|lifetime --owner-email … --owner-name …` | Creates a tenant and its owner; prints the owner's generated password once |
 | `bun run seed` | Two demo barbershops (`magicstudio`, `elite`) with staff and customer accounts, all with password `demo1234`; skips a tenant that already exists. `--reset` wipes first, only on `*_test` / `*_e2e` databases. Refuses production. Accounts and URLs: `../frontend/DEMO.md` |
+| `bun run platform-staff:create --email … --name …` | Creates a global platform staff account (outside any barbershop); prints its generated password once |
 | `bun run vapid:keys` | Prints a VAPID key pair for Web Push (`VAPID_*` in `.env`) |
 
 ## API
@@ -82,6 +83,13 @@ Every `/v1` request needs the tenant's host in `X-Forwarded-Host` (the frontend 
 | `POST /v1/billing/referral-check` | owner | `{ code }` → `{ code, discountPercent }`. 404 `REFERRAL_NOT_FOUND`, 409 `REFERRAL_SELF` (own tenant or same owner email), 409 `REFERRAL_NOT_FIRST`; 20 per tenant per hour |
 | `POST /v1/billing/checkout` | owner | `{ referralCode?, returnUrl }` → `{ url }` of Stripe Checkout for the one monthly price (`STRIPE_SUBSCRIPTION_PRICE`); paying sets plan `pro`. `returnUrl` must be the tenant's own site. 409 `ALREADY_SUBSCRIBED`, `LIFETIME_PLAN` |
 | `POST /v1/billing/portal` | owner | `{ returnUrl }` → `{ url }` of Stripe's customer portal (card, invoices, cancel). 409 `NO_BILLING_ACCOUNT` |
+| `POST /platform/auth/login` · `GET /platform/auth/me` · `POST /platform/auth/logout` | platform staff | Outside `/v1`: no tenant host. Own accounts (`platformStaff`) and 12 h sessions (`platformSessions`); tenant tokens don't work here and vice versa. 10 attempts per account and 30 per IP per 15 min |
+| `GET /platform/summary?from=&to=&tenantId=&branchId=&barberId=&status=` | platform staff | Totals per currency: `sales`, `collected`, `commission`, `paidOut`, `pending`, `avgTicket`, counts by status, `unconfigured` (completed cuts with no commission rate). `from`/`to` are local dates (each appointment's own branch time zone), at most 366 days apart |
+| `GET /platform/breakdown?by=tenant\|branch\|barber&…&page=&limit=` | platform staff | Every tenant/branch/barber in scope with its numbers (zeros included), ranked by sales. With `from=to=<day>` it is the day's earnings per barber |
+| `GET /platform/appointments?…&page=&limit=` · `GET /platform/appointments/:id` | platform staff | The cuts (newest first, ≤100 per page) with payment, commission and payout; the detail adds customer, items, discount and how the commission was worked out |
+| `GET /platform/options?tenantId=&branchId=` | platform staff | Names for the filters |
+| `PATCH /platform/barbers/:id/commission` | platform staff | `{ commissionBps: 0–10000 \| null }`; `null` removes the rate |
+| `POST /platform/payouts` | platform staff | `{ barberId, appointmentIds, reference?, paidAt? }` settles completed cuts; the amount is the sum of their commissions. 409 `COMMISSION_NOT_CONFIGURED`, `INVALID_APPOINTMENTS`, `ALREADY_PAID` |
 | `GET /v1/notifications/push-key` · `POST` · `DELETE /v1/notifications/push-subscriptions` | staff | VAPID public key (404 `PUSH_DISABLED` without keys) and the browser's push subscription |
 
 Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or ended more than 7 days ago. Sessions last 30 days and renew once past half their life.
@@ -89,7 +97,7 @@ Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or e
 ## Database safety
 
 - Outside `NODE_ENV=production` the app refuses any MongoDB host other than `localhost`, `127.0.0.1` or `[::1]`.
-- Under `bun test` it refuses any database whose name does not end in `_test` (`.env.test` sets `magicstudio_test`).
+- Under `bun test` it refuses any database whose name does not end in `_test` (`.env.test` sets `brb-studio_test`).
 - Only `MONGO_DB` is touched. Other databases on the same server are never read or written.
 
 ## Decisions
@@ -108,6 +116,8 @@ Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or e
 - **Performance:** the availability engine converts timezones once per window instead of per slot (30 barbers × 31 days in ~6 ms), so it stays on the main thread; no workers needed.
 - **Subscriptions:** Stripe Billing on the platform account (the barbershop pays us), apart from Connect (`features/payments`, its customers pay the barbershop). Both arrive at `/webhooks/stripe`; billing ignores events carrying `account`. Webhooks re-read the subscription from the API (events arrive out of order) and copy plan, status, period end and limits onto the tenant, so `requireActiveSubscription` works unchanged. Billing routes skip that middleware: an expired barbershop must be able to pay.
 - **Referrals:** a barbershop that has paid once gets an 8-symbol code (no I/O/0/1). Another barbershop using it on its first paid month gets 20% off that month (Stripe coupon, `duration: once`). Once that payment succeeds, the referrer gets 10% of the friend's list price as Stripe customer balance, which Stripe spends on the next invoices by itself and which stacks (10 friends = a free month; leftovers carry over). One referral per referee ever (unique index) and the credit carries an idempotency key, so a retried webhook can't pay twice. Rules in `billing/rules.ts`.
+- **Platform dashboard:** `features/platform` serves the global staff (`/platform/*`, outside `/v1`). Platform staff are not tenant users: separate collections, separate sessions, created only with `bun run platform-staff:create`. Their cross-tenant reads go through `platform.*` in `db/scoped.ts`. Money is never added across currencies (one total per currency). Four figures stay apart: **sales** (completed cuts' `totalMinor`), **collected** (Stripe `payment.status = paid`), **commission earned** and **payouts made**. Commission = `totalMinor × commissionBps / 10000`, rounded half up (`platform/commission.ts`, the only place the rule lives). Reports read with plain cursors and sum in JS (no `aggregate`, no `$lookup`: measured on 400k appointments, a year of one barbershop went from 680 ms to 87 ms and a year of all of them from 13 s to 1.6 s); a paid appointment carries `payoutId`, so "paid" needs no join. There is no default rate: `barbers.commissionBps` unset means "not configured", reported as such and never paid. The rate is frozen on the appointment (`commission: { bps, amountMinor }`) when it is completed or when its commission is paid, so later rate changes can't rewrite history. A payout settles whole appointments; the unique index on `payouts.appointmentIds` makes paying one twice impossible, even concurrently.
+- **Indexes (appointments):** `barber_start_confirmed_unique` (double-booking guard + availability), `tenant_branch_start` (agenda, branch reports; measured: also serves tenant-wide ranges with keys ≈ docs, so no `{tenantId,startAt}`), `barber_start` (one barber's agenda/earnings: 346 → 20 keys examined, +14 B/appointment), `tenant_customer_start`, `payment_intent`, `start` (cross-tenant platform reports; without it a COLLSCAN). `users.tenant_role` keeps the staff list from scanning every customer account.
 - **Business model:** one codebase. Subscription tenants plus one tenant on a `lifetime` plan. No per-customer forks.
 
 ## Layout
@@ -128,6 +138,7 @@ src/
     booking/    appointments, customers, snapshots (order.ts), cancel, reschedule
     promotions/ rules.ts (pure) + pricing and redemptions
     notifications/ in-app notifications, SSE stream, Web Push subscriptions
+    platform/   global staff dashboard: auth, aggregations, commission (pure), payouts
     billing/    subscription checkout, portal, webhook sync; referral codes and rewards (rules.ts is pure)
   shared/       errors, validation, time (local ↔ instant with Temporal), web-push
 scripts/        tenant-create.ts, seed.ts, vapid-keys.ts
@@ -140,4 +151,4 @@ The same as the frontend: exact pins, versions younger than 3 days refused (`bun
 
 ## Specs (OpenSpec)
 
-Business rules live as behavior specs in `openspec/specs/` (12 capabilities: tenancy, accounts-access, barbers-schedule, catalog, availability, booking, promotions, notifications, appointment-payments, subscription-billing, media, platform-safety), written from the code. `openspec list --specs` lists them, `openspec validate --specs --strict` checks them, and changes start with `/opsx:propose` in Claude Code. Update the spec in the same change as the code.
+Business rules live as behavior specs in `openspec/specs/` (13 capabilities: platform-dashboard, tenancy, accounts-access, barbers-schedule, catalog, availability, booking, promotions, notifications, appointment-payments, subscription-billing, media, platform-safety), written from the code. `openspec list --specs` lists them, `openspec validate --specs --strict` checks them, and changes start with `/opsx:propose` in Claude Code. Update the spec in the same change as the code.

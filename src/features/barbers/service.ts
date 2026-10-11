@@ -1,6 +1,12 @@
-import { type Filter, ObjectId } from "mongodb";
+import { type Filter, ObjectId, type WithId } from "mongodb";
 import type * as z from "zod";
-import { type BarberDoc, forTenant, type TenantDoc } from "../../db/scoped";
+import {
+  type BarberDoc,
+  type BranchDoc,
+  forTenant,
+  type TenantDoc,
+} from "../../db/scoped";
+import { collect, mapBy } from "../../shared/cursor";
 import { AppError, type Auth, duplicateKeys } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { visibleBranchIds } from "../auth/policy";
@@ -28,10 +34,11 @@ const visibleTo = (auth: Auth): Filter<BarberDoc> => {
 };
 
 export const listBarbers = (auth: Auth, branchId?: ObjectId) =>
-  forTenant(auth.tenantId)
-    .barbers.find({ $and: [visibleTo(auth), branchId ? { branchId } : {}] })
-    .sort({ name: 1 })
-    .toArray();
+  collect(
+    forTenant(auth.tenantId)
+      .barbers.find({ $and: [visibleTo(auth), branchId ? { branchId } : {}] })
+      .sort({ name: 1 }),
+  );
 
 export async function getBarber(auth: Auth, id: ObjectId) {
   const barber = await forTenant(auth.tenantId).barbers.findOne({
@@ -157,28 +164,37 @@ export async function publicBarbers(
   query: { branch?: string; service?: string; package?: string },
 ) {
   const t = forTenant(tenant._id);
-  const branches = await t.branches
-    .find({ active: true, ...(query.branch && { slug: query.branch }) })
-    .toArray();
-  if (query.branch && branches.length === 0) throw notFound();
+  const slugOf = await mapBy(
+    t.branches
+      .find({ active: true, ...(query.branch && { slug: query.branch }) })
+      .project<WithId<Pick<BranchDoc, "slug">>>({ slug: 1 }),
+    (b) => b._id.toHexString(),
+    (b) => b.slug,
+  );
+  if (query.branch && slugOf.size === 0) throw notFound();
   const request =
     (query.service || query.package) &&
     (await resolveRequest(tenant._id, query));
-  const slugOf = new Map(branches.map((b) => [b._id.toHexString(), b.slug]));
-  const barbers = await t.barbers
-    .find({ active: true, branchId: { $in: branches.map((b) => b._id) } })
-    .sort({ name: 1 })
-    .toArray();
-  const able = request ? barbers.filter((b) => canServe(b, request)) : barbers;
-  return able.map((b) => ({
-    id: b._id.toHexString(),
-    slug: b.slug,
-    name: b.name,
-    specialty: b.specialty,
-    bio: b.bio,
-    ...photos(b),
-    branch: slugOf.get(b.branchId.toHexString()),
-  }));
+  const able = [];
+  const cursor = t.barbers
+    .find({
+      active: true,
+      branchId: { $in: [...slugOf.keys()].map((id) => new ObjectId(id)) },
+    })
+    .sort({ name: 1 });
+  for await (const b of cursor) {
+    if (request && !canServe(b, request)) continue;
+    able.push({
+      id: b._id.toHexString(),
+      slug: b.slug,
+      name: b.name,
+      specialty: b.specialty,
+      bio: b.bio,
+      ...photos(b),
+      branch: slugOf.get(b.branchId.toHexString()),
+    });
+  }
+  return able;
 }
 
 export const toBarber = (b: BarberDoc) => ({

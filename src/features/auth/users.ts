@@ -1,6 +1,7 @@
 import { ObjectId } from "mongodb";
 import type * as z from "zod";
 import { forTenant, platform, type UserDoc } from "../../db/scoped";
+import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { getBranch } from "../tenancy/service";
 import type { STAFF_ROLES, staffCreate, staffUpdate } from "./schemas";
@@ -20,10 +21,11 @@ function assertCanGrant(auth: Auth, role: (typeof STAFF_ROLES)[number]) {
 }
 
 export const listStaff = (auth: Auth) =>
-  forTenant(auth.tenantId)
-    .users.find({ role: { $ne: "customer" } })
-    .sort({ name: 1 })
-    .toArray();
+  collect(
+    forTenant(auth.tenantId)
+      .users.find({ role: { $ne: "customer" } })
+      .sort({ name: 1 }),
+  );
 
 export async function createStaff(
   auth: Auth,
