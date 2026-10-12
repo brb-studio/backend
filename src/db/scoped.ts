@@ -14,8 +14,12 @@ import * as raw from "./collections";
 
 export type * from "./collections";
 export {
+  APPOINTMENT_PAYMENT_STATUSES,
   APPOINTMENT_STATUSES,
+  CONNECT_STATUSES,
   LOCALES,
+  PAYMENT_KINDS,
+  PAYMENT_METHODS,
   PAYMENT_STATUSES,
   PLANS,
   REFERRAL_STATUSES,
@@ -98,6 +102,9 @@ export const platform = {
   ownerProject: raw.ownerProject,
   subscriptionPayments: raw.subscriptionPayments,
 };
+
+/** Ids of Stripe events already handled (not tenant data): only the Stripe webhook reads or writes it. */
+export const stripeEventLog = raw.stripeEvents;
 
 export async function runAll<T>(
   tasks: (() => Promise<T>)[],

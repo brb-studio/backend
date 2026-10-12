@@ -19,10 +19,19 @@ La cuenta receptora SHALL leerse de la colección `ownerProject` (documento `act
 - **WHEN** el owner pide pagar y `ownerProject.bankAccountKey` no pasa la validación
 - **THEN** la respuesta es 503 `BILLING_DISABLED`
 
-### Requirement: Pedir y confirmar el pago
-`POST /v1/billing/payment` con `{ referralCode? }` SHALL crear un pago `pending` con importe = precio de lista − descuento de referido (solo primer mes) − crédito disponible, todo calculado en el servidor; pedirlo otra vez mientras sigue pendiente devuelve el mismo. Vence a los 5 días (`expired`). Solo el staff de plataforma SHALL listar (`GET /platform/subscriptions?status=`), confirmar (`POST /platform/subscriptions/:id/confirm` con `receivedMinor` igual al importe y `reference?`; si no, 422 `AMOUNT_MISMATCH`) y rechazar (`.../reject`). Confirmar actualiza en una transacción el pago, el plan, el periodo, el crédito gastado y la recompensa de referido; confirmar de nuevo es 409 `INVALID_TRANSITION`. Si el crédito cubre todo el mes, el pago nace `paid` sin transferencia.
+### Requirement: Pedir el pago
+`POST /v1/billing/payment` con `{ referralCode? }` SHALL crear un pago `pending` con importe = precio de lista − descuento de referido (solo primer mes) − crédito disponible, todo calculado en el servidor; pedirlo otra vez mientras sigue pendiente devuelve el mismo. Vence a los 5 días (`expired`). Si el crédito cubre todo el mes, el pago MUST nacer `paid` sin transferencia.
 
-Se rechaza con: 409 `LIFETIME_PLAN` (barbería `lifetime`), 429 `RATE_LIMITED` (más de 10 intentos por hora) y los errores de referido de abajo.
+#### Scenario: Barbería lifetime
+- **WHEN** una barbería con plan `lifetime` pide pagar
+- **THEN** la respuesta es 409 `LIFETIME_PLAN`
+
+#### Scenario: Demasiados intentos
+- **WHEN** la barbería pide pagar más de 10 veces en una hora
+- **THEN** la respuesta es 429 `RATE_LIMITED`
+
+### Requirement: Confirmar el pago
+Solo el staff de plataforma SHALL listar (`GET /platform/subscriptions?status=`), confirmar (`POST /platform/subscriptions/:id/confirm` con `receivedMinor` igual al importe y `reference?`) y rechazar (`.../reject`). Confirmar MUST actualizar en una transacción el pago, el plan, el periodo, el crédito gastado y la recompensa de referido; confirmar de nuevo es 409 `INVALID_TRANSITION`.
 
 #### Scenario: Confirmación por el staff
 - **WHEN** el staff confirma el importe exacto de un pago pendiente
@@ -38,6 +47,10 @@ Se rechaza con: 409 `LIFETIME_PLAN` (barbería `lifetime`), 429 `RATE_LIMITED` (
 
 ### Requirement: Datos históricos de Stripe
 Los campos `billing.stripeCustomerId`, `billing.stripeSubscriptionId` y `billing.cancelAt`, y los referidos con `checkoutSessionId`, MUST conservarse sin cambios aunque nada los use. La recompensa de referidos antiguos que Stripe guardó como saldo no se migra.
+
+#### Scenario: Barbería con suscripción antigua de Stripe
+- **WHEN** una barbería con `billing.stripeSubscriptionId` paga por transferencia
+- **THEN** ese campo se conserva sin cambios
 
 ### Requirement: Códigos de referido
 Una barbería que ya pagó al menos una vez SHALL tener un código de 8 símbolos sin `I`, `O`, `0` ni `1`, para que no se confundan al dictarlos o leerlos. Al escribirlo, se ignoran mayúsculas, espacios y guiones. La validación de códigos se limita a 20 intentos por hora.

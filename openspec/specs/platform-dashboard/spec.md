@@ -39,3 +39,7 @@ Un pago SHALL liquidar cortes completados enteros de un mismo barbero; su import
 
 ### Requirement: Trazabilidad por corte
 El detalle de un corte SHALL mostrar cliente, servicios, descuento, precio cobrado, pago, comisión (porcentaje, base, importe y si viene de la cita o de la configuración actual) y el pago al barbero con su fecha y referencia.
+
+#### Scenario: Corte con comisión ya pagada
+- **WHEN** el staff abre un corte completado cuya comisión se liquidó
+- **THEN** ve el porcentaje congelado en la cita, el importe y el pago al barbero con su fecha y referencia

@@ -4,6 +4,8 @@ export type CollectionSpec = {
   name: string;
   validator: Document;
   indexes: IndexDescription[];
+  /** Index names a spec no longer uses; dropped on boot when they still exist. */
+  dropIndexes?: string[];
 };
 
 export async function ensureCollections(db: Db, specs: CollectionSpec[]) {
@@ -11,7 +13,7 @@ export async function ensureCollections(db: Db, specs: CollectionSpec[]) {
   for await (const { name } of db.listCollections({}, { nameOnly: true })) {
     existing.add(name);
   }
-  for (const { name, validator, indexes } of specs) {
+  for (const { name, validator, indexes, dropIndexes = [] } of specs) {
     const options = {
       validator,
       validationLevel: "strict",
@@ -19,6 +21,14 @@ export async function ensureCollections(db: Db, specs: CollectionSpec[]) {
     } as const;
     if (existing.has(name)) await db.command({ collMod: name, ...options });
     else await db.createCollection(name, options);
-    if (indexes.length > 0) await db.collection(name).createIndexes(indexes);
+    const collection = db.collection(name);
+    if (existing.has(name) && dropIndexes.length > 0) {
+      for await (const index of collection.listIndexes()) {
+        if (dropIndexes.includes(index.name)) {
+          await collection.dropIndex(index.name);
+        }
+      }
+    }
+    if (indexes.length > 0) await collection.createIndexes(indexes);
   }
 }

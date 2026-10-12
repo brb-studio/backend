@@ -20,7 +20,7 @@ Los inicios posibles SHALL generarse cada `slotIntervalMin` desde la apertura de
 - **THEN** el último horario ofrecido es a las 19:15
 
 ### Requirement: Bloqueos, citas y margen
-Un horario MUST NOT encimarse con ausencias ni cierres. Tampoco su fin más el margen (`bufferMin`) MUST encimarse con citas confirmadas, cada una ocupada hasta su fin más el margen (`blockedUntil`).
+Un horario MUST NOT encimarse con ausencias ni cierres. Tampoco su fin más el margen (`bufferMin`) MUST encimarse con citas confirmadas ni con citas `pending_payment` cuyo `paymentDeadline` no ha pasado, cada una ocupada hasta su fin más el margen (`blockedUntil`). Un apartado vencido no ocupa el horario aunque aún no se haya cancelado.
 
 #### Scenario: Margen entre citas
 - **WHEN** hay una cita de 10:00 a 10:45 con margen de 15 minutos

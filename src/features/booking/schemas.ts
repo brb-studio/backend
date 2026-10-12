@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { PAYMENT_KINDS } from "../../db/scoped";
 import { objectId } from "../../shared/http";
 import { email } from "../auth/schemas";
 import { code } from "../promotions/schemas";
@@ -23,6 +24,12 @@ export const guest = z.strictObject({
 
 const notes = z.string().trim().min(1).max(500);
 
+/** How a customer pays online: never an amount, the API computes it from the booking. */
+export const onlineChoice = z.strictObject({
+  kind: z.enum(PAYMENT_KINDS),
+  method: z.enum(["card", "bank_transfer"]),
+});
+
 const oneOf = (input: { service?: unknown; package?: unknown }) =>
   !input.service !== !input.package;
 
@@ -36,6 +43,7 @@ export const publicBooking = z
     customer: guest.optional(),
     code: code.optional(),
     notes: notes.optional(),
+    payment: onlineChoice.optional(),
   })
   .refine(oneOf, { error: "book a service or a package" });
 

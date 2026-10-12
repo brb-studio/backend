@@ -2,7 +2,7 @@
 
 > Lee este archivo primero. Es la única puerta de entrada. El detalle vive en 3 pilares; no adivines nada que esté escrito ahí.
 
-**Stack:** Bun 1.4 · Hono (core) · Zod 4 · MongoDB 7 (replica set `rs0`, transacciones) · pagos de citas y suscripciones por transferencia SPEI (sin Stripe) · TypeScript estricto (`noUncheckedIndexedAccess`, sin `any`).
+**Stack:** Bun 1.4 · Hono (core) · Zod 4 · MongoDB 7 (replica set `rs0`, transacciones) · pagos de citas en línea con Stripe Connect (tarjeta o SPEI, cliente `fetch` sin SDK) o SPEI manual · suscripciones por SPEI manual · TypeScript estricto (`noUncheckedIndexedAccess`, sin `any`).
 
 ## Orden de lectura obligatorio
 

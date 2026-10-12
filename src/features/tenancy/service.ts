@@ -11,6 +11,12 @@ import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { photos } from "../../shared/photos";
 import { isTenantWide, visibleBranchIds } from "../auth/policy";
+import {
+  depositOf,
+  holdMinutes,
+  onlineMethodsOf,
+  onlinePaymentsReady,
+} from "../payments/connect";
 import { transfersAvailable } from "../payments/service";
 import {
   type branchCreate,
@@ -147,6 +153,20 @@ export async function updateBranch(
   return branch;
 }
 
+/** How a visitor can pay: manual transfer, and online (card or transfer) with the deposit rule and hold times. */
+function publicPayments(tenant: TenantDoc) {
+  const online = onlinePaymentsReady(tenant);
+  return {
+    transfer: transfersAvailable(tenant),
+    online,
+    ...(online && {
+      deposit: depositOf(tenant),
+      holdMinutes: holdMinutes(),
+      methods: onlineMethodsOf(tenant),
+    }),
+  };
+}
+
 export async function publicTenant(tenant: TenantDoc) {
   const branches = await collect(
     forTenant(tenant._id).branches.find({ active: true }).sort({ name: 1 }),
@@ -159,7 +179,7 @@ export async function publicTenant(tenant: TenantDoc) {
     defaultLocale: tenant.defaultLocale,
     theme: tenant.theme ?? {},
     brand: tenant.brand,
-    payments: { transfer: transfersAvailable(tenant) },
+    payments: publicPayments(tenant),
     branches: branches.map(({ active: _, ...branch }) => toBranch(branch)),
   };
 }

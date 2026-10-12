@@ -60,7 +60,7 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 | `notifications/` | notificaciones in-app, SSE, push subscriptions | — |
 | `platform/` | dashboard staff global: auth, reportes, comisión, payouts | `commission.ts` (`resolveCommission`, único lugar de la regla) |
 | `billing/` | suscripción por transferencia SPEI a `ownerProject`, referidos | `rules.ts` |
-| `payments/` | Transferencias SPEI directas a la CLABE de la barbería, confirmación manual | `service.ts`, `clabe.ts`, `token.ts` |
+| `payments/` | Pagos en línea con Stripe Connect (`connect.ts` cuenta conectada, `checkout.ts` cobro, `holds.ts` apartado, `ledger.ts`/`settle.ts` resultado, `webhook.ts`, cliente `stripe/`) y SPEI manual a la CLABE de la barbería (`service.ts`) | `rules.ts` (anticipo, comisión, reembolso), `clabe.ts`, `token.ts`, `stripe/signature.ts` |
 | `images/` | upload JPEG/PNG/WebP ≤1MB, tipo leído de los bytes | — |
 
 ## Base de datos (`db/`)
@@ -69,7 +69,7 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 - `scoped.ts:66` — `forTenant(tenantId)` inyecta `tenantId` en **cada** query (`find`, `findOne`, `insertOne`, `updateOne/Many`, `findOneAndUpdate`, `deleteOne`, `countDocuments`).
 - `scoped.ts:83` — `platform.*` expone colecciones crudas para lecturas cross-tenant. **Solo `features/platform/` lo usa.**
 - `scoped.ts:99-115` — `runAll()` (paralelo sin sesión, secuencial con sesión) y `transaction()` (`snapshot` + `majority`).
-- `collections.ts` — validadores (`bsonType: "int"` para dinero) e índices. Índices clave de `appointments`: `barber_start_confirmed_unique` (anti-doble-reserva), `tenant_branch_start`, `barber_start`, `tenant_customer_start`, `payment_intent`, `start`.
+- `collections.ts` — validadores (`bsonType: "int"` para dinero) e índices. Índices clave de `appointments`: `barber_start_live_unique` (anti-doble-reserva), `tenant_branch_start`, `barber_start`, `tenant_customer_start`, `payment_intent`, `start`.
 
 ## Reglas de navegación para IA
 

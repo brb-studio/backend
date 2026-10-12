@@ -53,16 +53,76 @@ export async function notifyBarber(
   return notification;
 }
 
+/** Owners and admins hear about chargebacks: money the platform may have to return. */
+export async function notifyOwners(
+  t: TenantDb,
+  event: {
+    type: NotificationDoc["type"];
+    appointment: AppointmentDoc;
+    branch: Pick<BranchDoc, "name">;
+    customerName: string;
+  },
+  session: ClientSession,
+) {
+  const { appointment } = event;
+  const owners = await collect(
+    t.users
+      .find(
+        { role: { $in: ["owner", "admin"] }, active: true },
+        { session, limit: 50 },
+      )
+      .project<{ _id: ObjectId }>({ _id: 1 }),
+  );
+  const notes: NotificationDoc[] = owners.map(({ _id }) => ({
+    _id: new ObjectId(),
+    tenantId: appointment.tenantId,
+    userId: _id,
+    type: event.type,
+    appointmentId: appointment._id,
+    summary: {
+      start: instantToLocal(appointment.startAt, appointment.timeZone),
+      timeZone: appointment.timeZone,
+      customerName: event.customerName,
+      items: appointment.items.map((item) => item.name),
+      branchName: event.branch.name,
+    },
+    createdAt: new Date(),
+  }));
+  for (const note of notes) {
+    await t.notifications.insertOne(note, { session });
+  }
+  return notes;
+}
+
+/** Push goes out after the commit; a failing push service never undoes a booking or a payment. */
+export function pushAfterCommit(
+  tenant: WithId<Pick<TenantDoc, "defaultLocale">>,
+  notes: (NotificationDoc | undefined)[],
+) {
+  const list = notes.filter((n): n is NotificationDoc => n !== undefined);
+  deliverPush(tenant, list).catch((err: unknown) =>
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "push_failed",
+        message: String(err),
+      }),
+    ),
+  );
+}
+
 const TITLES: Record<Locale, Record<NotificationDoc["type"], string>> = {
   es: {
     "appointment.booked": "Nueva cita",
     "appointment.cancelled": "Cita cancelada",
     "appointment.rescheduled": "Cita reprogramada",
+    "payment.disputed": "Pago en disputa",
   },
   en: {
     "appointment.booked": "New appointment",
     "appointment.cancelled": "Appointment cancelled",
     "appointment.rescheduled": "Appointment rescheduled",
+    "payment.disputed": "Payment disputed",
   },
 };
 

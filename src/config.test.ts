@@ -23,7 +23,49 @@ describe("parseConfig", () => {
       CORS_ORIGINS: "",
       SUBSCRIPTION_PRICE_MINOR: 30_000,
       SUBSCRIPTION_CURRENCY: "MXN",
+      STRIPE_CARD_FEE_BPS: 360,
+      STRIPE_CARD_FEE_FIXED_MINOR: 300,
+      STRIPE_CARD_FEE_FIXED_MINOR_USD: 20,
+      STRIPE_INTL_CARD_FEE_BPS: 50,
+      STRIPE_FX_FEE_BPS: 200,
+      STRIPE_TRANSFER_FEE_BPS: 0,
+      STRIPE_TRANSFER_FEE_FIXED_MINOR: 700,
+      STRIPE_FEE_TAX_BPS: 1600,
+      PAYMENT_HOLD_CARD_MIN: 20,
+      PAYMENT_HOLD_TRANSFER_MIN: 60,
     });
+  });
+
+  test("Stripe: test keys outside production, live keys in it, always with a webhook secret", () => {
+    const stripe = {
+      STRIPE_SECRET_KEY: "rk_test_abc123",
+      STRIPE_WEBHOOK_SECRET: "whsec_one,whsec_two",
+    };
+    expect(parseConfig({ ...local, ...stripe }).STRIPE_WEBHOOK_SECRET).toEqual([
+      "whsec_one",
+      "whsec_two",
+    ]);
+    expect(
+      errorOf({ ...local, ...stripe, STRIPE_SECRET_KEY: "sk_live_abc123" }),
+    ).toContain("STRIPE_SECRET_KEY");
+    expect(
+      errorOf({ ...local, STRIPE_SECRET_KEY: stripe.STRIPE_SECRET_KEY }),
+    ).toContain("STRIPE_WEBHOOK_SECRET");
+    expect(errorOf({ ...local, STRIPE_SECRET_KEY: "pk_test_abc" })).toContain(
+      "STRIPE_SECRET_KEY",
+    );
+    const production = {
+      ...local,
+      ...stripe,
+      NODE_ENV: "production",
+      PROXY_SECRET: "x".repeat(32),
+      PAYMENT_TOKEN_SECRET: "y".repeat(32),
+    };
+    expect(errorOf(production)).toContain("STRIPE_SECRET_KEY");
+    expect(
+      parseConfig({ ...production, STRIPE_SECRET_KEY: "sk_live_abc" })
+        .STRIPE_SECRET_KEY,
+    ).toBe("sk_live_abc");
   });
 
   test("accepts every localhost form", () => {

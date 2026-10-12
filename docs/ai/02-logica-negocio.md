@@ -5,7 +5,7 @@
 ## Dónde viven las reglas
 
 - `openspec/specs/<capability>/spec.md` — 13 capabilities (abajo). Lenguaje: español, encabezados estructurales y keywords SHALL/MUST en inglés (ver `openspec/config.yaml`).
-- Implementación pura (testeable sin DB): `catalog/rules.ts`, `promotions/rules.ts`, `availability/engine.ts`, `platform/commission.ts`, `billing/rules.ts`, `booking/order.ts`.
+- Implementación pura (testeable sin DB): `catalog/rules.ts`, `promotions/rules.ts`, `availability/engine.ts`, `platform/commission.ts`, `billing/rules.ts`, `booking/order.ts`, `payments/rules.ts`.
 - Comandos: `openspec list --specs` · `openspec validate --specs --strict`. Cambios: `/opsx:propose` (o `openspec propose`) → código + spec en el mismo cambio.
 
 ## Mapa de capabilities (qué leer según qué vas a tocar)
@@ -19,7 +19,7 @@
 | `availability` | motor de slots libres, ventana de reserva, aviso mínimo, timezones por sucursal |
 | `booking` | reserva pública/staff/walk-in, snapshots, cancel/reschedule, anti-doble-reserva |
 | `promotions` | `percent`/`fixed`, códigos, `firstVisitOnly`, `maxRedemptions`, mejor descuento gana, `priceFor()` |
-| `appointment-payments` | transferencia SPEI, confirmación manual, estados de pago |
+| `appointment-payments` | Stripe Connect (cuenta conectada, anticipo, `pending_payment`, webhook, reembolsos, disputas) y SPEI manual |
 | `subscription-billing` | transferencia SPEI a `ownerProject`, confirmación por staff de plataforma, plan `pro`/`lifetime`, referidos (20% amigo, 10% referidor como crédito) |
 | `notifications` | notificación en la transacción de reserva, SSE (change stream), Web Push (VAPID, chunks de 20) |
 | `platform-dashboard` | summary/breakdown/appointments/options, comisión, payouts |
@@ -39,6 +39,7 @@
 9. **Referidos idempotentes:** un referido una sola vez (índice único); el crédito lleva idempotency key para que un webhook reintentado no pague doble.
 10. **Suscripciones:** el owner pide un pago (`pending`, 5 días) y plataforma lo confirma a mano; confirmar fija plan `pro`, suma un mes y mueve crédito/recompensas en una transacción. Rutas de billing saltan `requireActiveSubscription` (una tienda vencida debe poder pagar).
 11. **Notificaciones garantizadas:** la notificación del barbero se escribe **dentro** de la transacción de reserva. Push se envía post-commit; 404/410 del push-service borra la suscripción; solo hosts push conocidos (anti-SSRF).
+12. **Pagos en línea:** el monto sale de la cita (`priceFor()` + `payments/rules.ts`), nunca del cliente. Una cita `pending_payment` aparta el horario hasta `paymentDeadline`; solo el webhook de Stripe (firma verificada, evento idempotente, PaymentIntent releído y comparado con lo guardado) la confirma. Lo que llega tarde se reembolsa completo.
 
 ## Workflow de cambio de negocio (obligatorio)
 

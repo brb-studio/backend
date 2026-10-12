@@ -33,6 +33,7 @@ import {
   paymentPublicRoutes,
   paymentStaffRoutes,
 } from "./features/payments/routes";
+import { stripeWebhookRoutes } from "./features/payments/webhook";
 import { platformRoutes } from "./features/platform/routes";
 import { earningsRoutes } from "./features/platform/tenant-routes";
 import { promotionRoutes } from "./features/promotions/routes";
@@ -113,6 +114,8 @@ export const app = new Hono<Env>()
   })
   .route("/images", publicImageRoutes)
   .route("/platform", platformRoutes)
+  // Stripe calls this without a tenant host: the tenant comes from each payment's metadata, checked against the database.
+  .route("/webhooks", stripeWebhookRoutes)
   .use("/v1/*", resolveTenant, authenticate)
   .route("/v1/auth", authRoutes)
   .route("/v1/public", publicRoutes)

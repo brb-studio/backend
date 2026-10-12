@@ -6,11 +6,18 @@ Avisos al barbero cuando le reservan, cancelan o mueven una cita: guardados, en 
 ## Requirements
 
 ### Requirement: Aviso dentro de la misma transacción
-Cada reserva, cancelación y reprogramación SHALL guardar, en la misma transacción, un aviso (`appointment.booked`, `appointment.cancelled` o `appointment.rescheduled`) para la cuenta vinculada al barbero, con hora local, cliente, servicios y sucursal. Nunca hay cita sin su aviso. Si el barbero no tiene cuenta vinculada, o si él mismo hizo el cambio, no se genera aviso. Los avisos se borran solos a los 90 días.
+Cada reserva, cancelación y reprogramación SHALL guardar, en la misma transacción, un aviso (`appointment.booked`, `appointment.cancelled` o `appointment.rescheduled`) para la cuenta vinculada al barbero, con hora local, cliente, servicios y sucursal. Nunca hay cita confirmada sin su aviso. Si el barbero no tiene cuenta vinculada, o si él mismo hizo el cambio, no se genera aviso. Los avisos se borran solos a los 90 días.
 
 #### Scenario: El barbero agenda su propia cita
 - **WHEN** un barbero crea una cita para sí mismo desde el panel
 - **THEN** no recibe aviso de esa cita
+
+### Requirement: Avisos de pagos en línea
+Una reserva pagada en línea SHALL guardar `appointment.booked` en la transacción que confirma el pago, no al apartar el horario. Una disputa de pago MUST guardar `payment.disputed` para cada owner y admin activo.
+
+#### Scenario: Reserva aún sin pagar
+- **WHEN** un cliente aparta un horario y todavía no paga
+- **THEN** el barbero no recibe aviso hasta que el pago se confirma
 
 ### Requirement: Bandeja de avisos
 Cada usuario del staff SHALL ver sus últimos 50 avisos y el número de no leídos, y poder marcar como leídos algunos (hasta 100 ids) o todos. Un usuario MUST NOT ver avisos de otro.

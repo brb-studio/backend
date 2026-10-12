@@ -1,6 +1,28 @@
-import type { Binary, Document, ObjectId } from "mongodb";
+import type { Binary, ObjectId } from "mongodb";
+import { billingSpecs } from "./billing";
 import { db } from "./client";
+import {
+  APPOINTMENT_PAYMENT_STATUSES,
+  PAYMENT_KINDS,
+  PAYMENT_METHODS,
+  type PaymentKind,
+  type PaymentMethod,
+  paymentSpecs,
+} from "./payments";
 import type { CollectionSpec } from "./setup";
+import {
+  bool,
+  date,
+  int,
+  object,
+  objectId,
+  oneOf,
+  REFERRAL_CODE,
+  string,
+} from "./validators";
+
+export * from "./billing";
+export * from "./payments";
 
 export const LOCALES = ["es", "en"] as const;
 export const ROLES = [
@@ -12,6 +34,13 @@ export const ROLES = [
 ] as const;
 export const PLANS = ["trial", "basic", "pro", "lifetime"] as const;
 export const STATUSES = ["trialing", "active", "past_due", "canceled"] as const;
+/** `onboarding`: the owner hasn't finished Stripe's form; `pending`: Stripe is reviewing; `restricted`: Stripe needs more or refused. */
+export const CONNECT_STATUSES = [
+  "onboarding",
+  "pending",
+  "active",
+  "restricted",
+] as const;
 
 export type Locale = (typeof LOCALES)[number];
 export type Role = (typeof ROLES)[number];
@@ -45,6 +74,29 @@ export type TenantDoc = {
   bankAccountKey?: string;
   bankAccountHolder?: string;
   bankTransferEnabled?: boolean;
+  /**
+   * The barbershop's Stripe connected account (Accounts v2, recipient configuration): card and bank
+   * transfer payments are charged by the platform and transferred here. Only Stripe's webhooks (or a
+   * fresh read of the account from Stripe) change `status` and `requirementsDue`.
+   */
+  stripeConnect?: {
+    accountId: string;
+    /** `active` once Stripe can transfer to it; only then are online payments offered. */
+    status: (typeof CONNECT_STATUSES)[number];
+    /** What Stripe still needs from the owner (machine-readable descriptions). */
+    requirementsDue: string[];
+    /**
+     * Fees the platform lost refunding the shop's customers (the shop cancelled or refunded), still
+     * owed by the shop: added to the fee of its next online payments until paid off.
+     */
+    feeDebtMinor?: number;
+    /** The currency of `feeDebtMinor`: only payments in that currency collect it. */
+    feeDebtCurrency?: string;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  /** Online payment rules: when `enabled`, booking online requires paying at least `percentBps` of the total. */
+  deposit?: { enabled: boolean; percentBps: number };
   billing?: {
     /** Legacy Stripe subscription ids and cancellation date; nothing reads or writes them anymore. */
     stripeCustomerId?: string;
@@ -228,12 +280,16 @@ export type CustomerDoc = {
   name: string;
   phone?: string;
   email?: string;
+  /** The Stripe Customer used for bank transfers (on the platform account); Stripe gives it its own CLABE. */
+  stripeCustomerId?: string;
   createdAt: Date;
   updatedAt: Date;
 };
 
+/** `pending_payment`: booked online and waiting for the payment; it holds the slot until `paymentDeadline`. */
 export const APPOINTMENT_STATUSES = [
   "confirmed",
+  "pending_payment",
   "completed",
   "cancelled",
   "no_show",
@@ -271,23 +327,14 @@ export type PromotionSnapshot = {
   amountMinor: number;
 };
 
-/** `requires_payment`, `refunded` and `failed` only exist on legacy Stripe payments; SPEI uses `pending`, `paid`, `rejected` and `expired`. */
-export type AppointmentPaymentStatus =
-  | "requires_payment"
-  | "paid"
-  | "refunded"
-  | "failed"
-  | "pending"
-  | "rejected"
-  | "expired";
-
-export const PAYMENT_STATUSES = [
-  "pending",
-  "paid",
-  "rejected",
-  "expired",
+/** `requires_payment` and `failed` only exist on legacy Stripe Connect payments (before 2026). */
+export const APPOINTMENT_SUMMARY_STATUSES = [
+  ...APPOINTMENT_PAYMENT_STATUSES,
+  "requires_payment",
+  "failed",
 ] as const;
-export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+export type AppointmentPaymentStatus =
+  (typeof APPOINTMENT_SUMMARY_STATUSES)[number];
 
 export type AppointmentDoc = {
   _id: ObjectId;
@@ -306,16 +353,28 @@ export type AppointmentDoc = {
   discountMinor: number;
   totalMinor: number;
   promotion?: PromotionSnapshot;
-  /** Summary of the latest payment; for SPEI the source of truth is the `payments` document. */
+  /** Online bookings waiting to be paid: past this instant the slot is free again and the booking is cancelled. */
+  paymentDeadline?: Date;
+  /**
+   * Summary of the latest payment; the `payments` document is the source of truth. `spei` = manual
+   * transfer to the barbershop's own CLABE. `stripe` with a `paymentId` = card or bank transfer through
+   * Stripe; without one, a legacy Stripe Connect payment.
+   */
   payment?: {
     provider: "stripe" | "spei";
-    /** Legacy Stripe only. */
     intentId?: string;
-    /** SPEI only. */
     paymentId?: ObjectId;
+    method?: PaymentMethod;
+    kind?: PaymentKind;
     status: AppointmentPaymentStatus;
+    /** What was asked: the deposit or the whole total. */
     amountMinor: number;
+    refundedMinor?: number;
     applicationFeeMinor?: number;
+    /** Part of the fee that paid the shop's fee debt, so the customer's refund never covers it. */
+    debtMinor?: number;
+    cardBrand?: string;
+    cardLast4?: string;
     paidAt?: Date;
   };
   /** Frozen when the appointment is completed (or its commission is paid) so later rate changes can't rewrite history. */
@@ -358,10 +417,12 @@ export const customers = db.collection<CustomerDoc>("customers");
 export const appointments = db.collection<AppointmentDoc>("appointments");
 export const promotions = db.collection<PromotionDoc>("promotions");
 
+/** `payment.disputed` goes to owners and admins: a customer opened a chargeback on an online payment. */
 export const NOTIFICATION_TYPES = [
   "appointment.booked",
   "appointment.cancelled",
   "appointment.rescheduled",
+  "payment.disputed",
 ] as const;
 
 export type NotificationDoc = {
@@ -439,96 +500,12 @@ export type PayoutDoc = {
   createdAt: Date;
 };
 
-/** A SPEI transfer a customer owes for one appointment; the barbershop confirms or rejects it by hand. */
-export type PaymentDoc = {
-  _id: ObjectId;
-  tenantId: ObjectId;
-  appointmentId: ObjectId;
-  method: "spei";
-  status: PaymentStatus;
-  amountMinor: number;
-  currency: string;
-  /** The account shown to the customer, frozen at creation so later edits can't redirect a payment in flight. */
-  bank: { clabe: string; holder: string };
-  createdAt: Date;
-  expiresAt: Date;
-  /** Transfer tracking key (clave de rastreo) typed by whoever confirmed it. */
-  reference?: string;
-  resolvedAt?: Date;
-  resolvedBy?: ObjectId;
-  rejectionReason?: string;
-  /** Every transition, oldest first. */
-  history: { status: PaymentStatus; at: Date; by?: ObjectId; note?: string }[];
-};
-
-/**
- * The project owner's account: the one that receives the barbershops' subscription transfers. Edited by
- * hand in the database; the app only reads it (`name` is the account holder).
- */
-export type OwnerProjectDoc = {
-  _id: ObjectId;
-  email: string;
-  name: string;
-  role: "owner";
-  active: boolean;
-  bankAccountKey?: string;
-};
-
-/** A barbershop's SPEI transfer for one month of the app; platform staff confirm it by hand. */
-export type SubscriptionPaymentDoc = {
-  _id: ObjectId;
-  tenantId: ObjectId;
-  status: PaymentStatus;
-  /** What the owner must transfer: list price, minus the referral discount, minus credit used. */
-  amountMinor: number;
-  listPriceMinor: number;
-  discountMinor: number;
-  creditAppliedMinor: number;
-  currency: string;
-  bank: { clabe: string; holder: string };
-  /** Present when a friend's code gave the first-month discount; the referrer is rewarded on confirmation. */
-  referral?: {
-    referrerTenantId: ObjectId;
-    code: string;
-    discountPercent: number;
-  };
-  createdAt: Date;
-  expiresAt: Date;
-  reference?: string;
-  resolvedAt?: Date;
-  /** Platform staff who resolved it; absent when credit covered the whole price. */
-  resolvedBy?: ObjectId;
-  rejectionReason?: string;
-  history: { status: PaymentStatus; at: Date; by?: ObjectId; note?: string }[];
-};
-
 export const platformStaff = db.collection<PlatformStaffDoc>("platformStaff");
 export const platformSessions =
   db.collection<PlatformSessionDoc>("platformSessions");
 export const payouts = db.collection<PayoutDoc>("payouts");
-export const payments = db.collection<PaymentDoc>("payments");
-export const ownerProject = db.collection<OwnerProjectDoc>("ownerProject");
-export const subscriptionPayments = db.collection<SubscriptionPaymentDoc>(
-  "subscriptionPayments",
-);
 
-const string = (extra: Document = {}) => ({ bsonType: "string", ...extra });
-const int = (minimum: number, maximum: number) => ({
-  bsonType: "int",
-  minimum,
-  maximum,
-});
-const objectId = { bsonType: "objectId" };
-const date = { bsonType: "date" };
-const bool = { bsonType: "bool" };
-const oneOf = (values: readonly string[]) => ({ enum: [...values] });
-const object = (required: string[], properties: Document) => ({
-  bsonType: "object",
-  required,
-  properties,
-});
 const HHMM = "^([01]\\d|2[0-3]):[0-5]\\d$";
-const REFERRAL_CODE = "^[A-HJ-NP-Z2-9]{8}$";
 const timestamps = { createdAt: date, updatedAt: date };
 const localized = { bsonType: "object" };
 const hours = {
@@ -588,6 +565,32 @@ export const specs: CollectionSpec[] = [
           bankAccountKey: string({ pattern: "^\\d{18}$" }),
           bankAccountHolder: string({ minLength: 1, maxLength: 120 }),
           bankTransferEnabled: bool,
+          stripeConnect: object(
+            [
+              "accountId",
+              "status",
+              "requirementsDue",
+              "createdAt",
+              "updatedAt",
+            ],
+            {
+              accountId: string({ pattern: "^acct_" }),
+              status: oneOf(CONNECT_STATUSES),
+              requirementsDue: {
+                bsonType: "array",
+                maxItems: 100,
+                items: string({ maxLength: 200 }),
+              },
+              feeDebtMinor: int(0, 100_000_000),
+              feeDebtCurrency: string({ pattern: "^[A-Z]{3}$" }),
+              createdAt: date,
+              updatedAt: date,
+            },
+          ),
+          deposit: object(["enabled", "percentBps"], {
+            enabled: bool,
+            percentBps: int(100, 10_000),
+          }),
           billing: {
             bsonType: "object",
             properties: {
@@ -616,6 +619,14 @@ export const specs: CollectionSpec[] = [
         name: "stripe_account_unique",
         unique: true,
         partialFilterExpression: { "stripe.accountId": { $type: "string" } },
+      },
+      {
+        key: { "stripeConnect.accountId": 1 },
+        name: "stripe_connect_unique",
+        unique: true,
+        partialFilterExpression: {
+          "stripeConnect.accountId": { $type: "string" },
+        },
       },
       {
         key: { referralCode: 1 },
@@ -931,6 +942,7 @@ export const specs: CollectionSpec[] = [
         name: string(),
         phone: string({ pattern: "^\\+?\\d{7,15}$" }),
         email: string(),
+        stripeCustomerId: string({ pattern: "^cus_" }),
         ...timestamps,
       }),
     },
@@ -1003,21 +1015,20 @@ export const specs: CollectionSpec[] = [
               amountMinor: int(0, 100_000_000),
             },
           ),
+          paymentDeadline: date,
           payment: object(["provider", "status", "amountMinor"], {
             provider: oneOf(["stripe", "spei"]),
             intentId: string({ pattern: "^pi_" }),
             paymentId: objectId,
-            status: oneOf([
-              "requires_payment",
-              "paid",
-              "refunded",
-              "failed",
-              "pending",
-              "rejected",
-              "expired",
-            ]),
+            method: oneOf(PAYMENT_METHODS),
+            kind: oneOf(PAYMENT_KINDS),
+            status: oneOf(APPOINTMENT_SUMMARY_STATUSES),
             amountMinor: int(1, 100_000_000),
+            refundedMinor: int(0, 100_000_000),
             applicationFeeMinor: int(0, 100_000_000),
+            debtMinor: int(0, 100_000_000),
+            cardBrand: string({ maxLength: 40 }),
+            cardLast4: string({ pattern: "^\\d{4}$" }),
             paidAt: date,
           }),
           commission: object(["bps", "amountMinor"], {
@@ -1044,11 +1055,14 @@ export const specs: CollectionSpec[] = [
       },
     },
     indexes: [
+      // A barber can't have two live bookings at the same start, including one held while it is being paid.
       {
         key: { barberId: 1, startAt: 1 },
-        name: "barber_start_confirmed_unique",
+        name: "barber_start_live_unique",
         unique: true,
-        partialFilterExpression: { status: "confirmed" },
+        partialFilterExpression: {
+          status: { $in: ["confirmed", "pending_payment"] },
+        },
       },
       {
         key: { tenantId: 1, branchId: 1, startAt: 1 },
@@ -1067,7 +1081,15 @@ export const specs: CollectionSpec[] = [
       { key: { barberId: 1, startAt: 1 }, name: "barber_start" },
       // Platform reports across barbershops (no tenant in the filter).
       { key: { startAt: 1 }, name: "start" },
+      // The sweep that frees slots held by unpaid online bookings.
+      {
+        key: { tenantId: 1, paymentDeadline: 1 },
+        name: "tenant_hold_deadline",
+        partialFilterExpression: { status: "pending_payment" },
+      },
     ],
+    /** Replaced by `barber_start_live_unique`, which also guards slots held while being paid. */
+    dropIndexes: ["barber_start_confirmed_unique"],
   },
   {
     name: "promotions",
@@ -1291,125 +1313,6 @@ export const specs: CollectionSpec[] = [
       },
     ],
   },
-  {
-    name: "payments",
-    validator: {
-      $jsonSchema: object(
-        [
-          "tenantId",
-          "appointmentId",
-          "method",
-          "status",
-          "amountMinor",
-          "currency",
-          "bank",
-          "createdAt",
-          "expiresAt",
-          "history",
-        ],
-        {
-          tenantId: objectId,
-          appointmentId: objectId,
-          method: oneOf(["spei"]),
-          status: oneOf(PAYMENT_STATUSES),
-          amountMinor: int(1, 100_000_000),
-          currency: string({ pattern: "^[A-Z]{3}$" }),
-          bank: object(["clabe", "holder"], {
-            clabe: string({ pattern: "^\\d{18}$" }),
-            holder: string({ minLength: 1, maxLength: 120 }),
-          }),
-          createdAt: date,
-          expiresAt: date,
-          reference: string({ maxLength: 120 }),
-          resolvedAt: date,
-          resolvedBy: objectId,
-          rejectionReason: string({ maxLength: 500 }),
-          history: {
-            bsonType: "array",
-            minItems: 1,
-            items: object(["status", "at"], {
-              status: oneOf(PAYMENT_STATUSES),
-              at: date,
-              by: objectId,
-              note: string({ maxLength: 500 }),
-            }),
-          },
-        },
-      ),
-    },
-    indexes: [
-      // One open transfer per appointment: the database refuses a second one.
-      {
-        key: { appointmentId: 1 },
-        name: "appointment_pending_unique",
-        unique: true,
-        partialFilterExpression: { status: "pending" },
-      },
-      { key: { tenantId: 1, status: 1, createdAt: -1 }, name: "tenant_status" },
-    ],
-  },
-  {
-    name: "subscriptionPayments",
-    validator: {
-      $jsonSchema: object(
-        [
-          "tenantId",
-          "status",
-          "amountMinor",
-          "listPriceMinor",
-          "discountMinor",
-          "creditAppliedMinor",
-          "currency",
-          "bank",
-          "createdAt",
-          "expiresAt",
-          "history",
-        ],
-        {
-          tenantId: objectId,
-          status: oneOf(PAYMENT_STATUSES),
-          amountMinor: int(0, 100_000_000),
-          listPriceMinor: int(1, 100_000_000),
-          discountMinor: int(0, 100_000_000),
-          creditAppliedMinor: int(0, 100_000_000),
-          currency: string({ pattern: "^[A-Z]{3}$" }),
-          bank: object(["clabe", "holder"], {
-            clabe: string({ pattern: "^\\d{18}$" }),
-            holder: string({ minLength: 1, maxLength: 120 }),
-          }),
-          referral: object(["referrerTenantId", "code", "discountPercent"], {
-            referrerTenantId: objectId,
-            code: string({ pattern: REFERRAL_CODE }),
-            discountPercent: int(1, 100),
-          }),
-          createdAt: date,
-          expiresAt: date,
-          reference: string({ maxLength: 120 }),
-          resolvedAt: date,
-          resolvedBy: objectId,
-          rejectionReason: string({ maxLength: 500 }),
-          history: {
-            bsonType: "array",
-            minItems: 1,
-            items: object(["status", "at"], {
-              status: oneOf(PAYMENT_STATUSES),
-              at: date,
-              by: objectId,
-              note: string({ maxLength: 500 }),
-            }),
-          },
-        },
-      ),
-    },
-    indexes: [
-      // One open subscription transfer per barbershop.
-      {
-        key: { tenantId: 1 },
-        name: "tenant_pending_unique",
-        unique: true,
-        partialFilterExpression: { status: "pending" },
-      },
-      { key: { status: 1, createdAt: -1 }, name: "status_created" },
-    ],
-  },
+  ...billingSpecs,
+  ...paymentSpecs,
 ];

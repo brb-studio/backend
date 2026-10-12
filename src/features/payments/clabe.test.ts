@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { isValidClabe } from "./clabe";
 
 test("accepts a CLABE with a correct check digit and rejects anything else", () => {
-
   expect(isValidClabe("002010077777777771")).toBe(true);
   expect(isValidClabe("032180000118359719")).toBe(true);
   expect(isValidClabe("002010077777777772")).toBe(false);

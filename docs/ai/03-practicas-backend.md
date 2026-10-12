@@ -90,7 +90,7 @@ const [tenantOf, branchOf] = await Promise.all([
 
 - Proyecta solo los campos necesarios (ver 1.2) y filtra **antes** de procesar: filtro grueso indexable en el `find` + filtro fino en JS (patrón `scope()` + `inPeriod()`).
 - Evita arrays intermedios y duplicación: prefiere `for await` acumulando o `collect` con `pick` slim; no hagas `collect` completo para luego mapear a otra forma en un segundo array.
-- Usa los índices adecuados a las consultas reales (índices de `appointments` en `collections.ts`/`setup.ts`: `barber_start_confirmed_unique`, `tenant_branch_start`, `barber_start`, `tenant_customer_start`, `payment_intent`, `start`). No crees índices redundantes ni optimices sin evidencia: mide con datos reales antes de añadir un índice.
+- Usa los índices adecuados a las consultas reales (índices de `appointments` en `collections.ts`/`setup.ts`: `barber_start_live_unique`, `tenant_branch_start`, `barber_start`, `tenant_customer_start`, `payment_intent`, `start`). No crees índices redundantes ni optimices sin evidencia: mide con datos reales antes de añadir un índice.
 - Dimensiona el resultado: cada `Map`/array final vive en memoria → `.limit()`, reads batcheados con `$in` (nunca uno por fila), paginación en 2 pases (`listAppointments`, `queries.ts:386-451`).
 - Mantén trazabilidad y tenancy en **todas** las consultas: `forTenant()` en features, filtros `tenantId`/`branchId`/`barberId` en `platform` (ver sección 2).
 

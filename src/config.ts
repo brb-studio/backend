@@ -40,6 +40,57 @@ const schema = z
       .string()
       .regex(/^[A-Z]{3}$/)
       .default("MXN"),
+    /**
+     * Platform key for card and bank-transfer payments through Stripe Connect. Without it (and the webhook
+     * secret) online payments stay off and every barbershop uses manual SPEI transfers. A restricted key
+     * (`rk_`) is preferred.
+     */
+    STRIPE_SECRET_KEY: z
+      .string()
+      .regex(
+        /^(sk|rk)_(test|live)_\w+$/,
+        "must be a Stripe secret or restricted key",
+      )
+      .optional(),
+    /** Signing secrets of the webhook destinations (`whsec_…`), comma separated: one per destination. */
+    STRIPE_WEBHOOK_SECRET: z
+      .string()
+      .regex(/^whsec_\w+(,whsec_\w+)*$/, "comma-separated whsec_ secrets")
+      .transform((value) => value.split(","))
+      .optional(),
+    /** Fee the platform keeps from each payment to cover Stripe's: basis points + fixed, plus tax on it. */
+    STRIPE_CARD_FEE_BPS: z.coerce.number().int().min(0).max(2000).default(360),
+    STRIPE_CARD_FEE_FIXED_MINOR: z.coerce.number().int().min(0).default(300),
+    /** Fixed part of the card fee for dollar charges, in cents (about MXN 3.00). */
+    STRIPE_CARD_FEE_FIXED_MINOR_USD: z.coerce.number().int().min(0).default(20),
+    /** Stripe's surcharges: foreign cards and currency conversion (dollar charges settle in pesos). */
+    STRIPE_INTL_CARD_FEE_BPS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(1000)
+      .default(50),
+    STRIPE_FX_FEE_BPS: z.coerce.number().int().min(0).max(1000).default(200),
+    STRIPE_TRANSFER_FEE_BPS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2000)
+      .default(0),
+    STRIPE_TRANSFER_FEE_FIXED_MINOR: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .default(700),
+    STRIPE_FEE_TAX_BPS: z.coerce.number().int().min(0).max(5000).default(1600),
+    /** Minutes a slot stays held while the customer pays online. */
+    PAYMENT_HOLD_CARD_MIN: z.coerce.number().int().min(5).max(120).default(20),
+    PAYMENT_HOLD_TRANSFER_MIN: z.coerce
+      .number()
+      .int()
+      .min(15)
+      .max(24 * 60)
+      .default(60),
     VAPID_PUBLIC_KEY: z
       .string()
       .regex(/^[\w-]{87}$/)
@@ -69,6 +120,22 @@ const schema = z
   .refine((env) => env.NODE_ENV !== "production" || env.PAYMENT_TOKEN_SECRET, {
     path: ["PAYMENT_TOKEN_SECRET"],
     error: "required in production, or guests cannot pay by transfer",
+  })
+  .refine(
+    (env) =>
+      !env.STRIPE_SECRET_KEY ||
+      env.STRIPE_SECRET_KEY.includes(
+        env.NODE_ENV === "production" ? "_live_" : "_test_",
+      ),
+    {
+      path: ["STRIPE_SECRET_KEY"],
+      error: "use a live key in production and a test key everywhere else",
+    },
+  )
+  .refine((env) => !env.STRIPE_SECRET_KEY === !env.STRIPE_WEBHOOK_SECRET, {
+    path: ["STRIPE_WEBHOOK_SECRET"],
+    error:
+      "set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET together, or neither",
   })
   .refine((env) => env.NODE_ENV !== "test" || env.MONGO_DB.endsWith("_test"), {
     path: ["MONGO_DB"],

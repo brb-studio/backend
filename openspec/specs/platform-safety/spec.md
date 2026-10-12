@@ -56,11 +56,20 @@ La configuración SHALL validarse al arrancar sin mostrar valores, con estas reg
 - Fuera de producción, MongoDB MUST ser `localhost`, `127.0.0.1` o `[::1]`.
 - Bajo pruebas, la base MUST terminar en `_test`.
 - Las llaves VAPID van completas o ausentes.
-- `PAYMENT_TOKEN_SECRET` es obligatoria en producción (firma el comprobante de reserva de los invitados).
-- El precio de suscripción (`SUBSCRIPTION_PRICE_MINOR`) es un entero positivo y su moneda (`SUBSCRIPTION_CURRENCY`) un código de 3 letras mayúsculas.
 
 Si la configuración es inválida, el proceso no arranca.
 
 #### Scenario: Base remota en desarrollo
 - **WHEN** en desarrollo `MONGO_URL` apunta a un host remoto
 - **THEN** el servidor no arranca y el mensaje no incluye la URL ni sus credenciales
+
+### Requirement: Configuración de pagos
+La configuración de pagos SHALL validarse al arrancar:
+- `PAYMENT_TOKEN_SECRET` MUST existir en producción (firma el comprobante de reserva de los invitados).
+- `SUBSCRIPTION_PRICE_MINOR` es un entero positivo y `SUBSCRIPTION_CURRENCY` un código de 3 letras mayúsculas.
+- `STRIPE_SECRET_KEY` y `STRIPE_WEBHOOK_SECRET` van juntas o ausentes (sin ellas, no hay pagos en línea).
+- Fuera de producción solo se aceptan llaves de Stripe de test; en producción, solo live.
+
+#### Scenario: Llave live en desarrollo
+- **WHEN** en desarrollo `STRIPE_SECRET_KEY` es una llave `sk_live_`
+- **THEN** el servidor no arranca

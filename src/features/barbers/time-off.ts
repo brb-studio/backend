@@ -12,6 +12,7 @@ import { collect, mapBy } from "../../shared/cursor";
 import { AppError, type Auth } from "../../shared/http";
 import { instantToLocal, localToInstant } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
+import { takesSlot } from "../availability/live";
 import { getBranch } from "../tenancy/service";
 import type { timeOffCreate } from "./schemas";
 import { getBarber, ownBarberId } from "./service";
@@ -58,7 +59,6 @@ export async function createTimeOff(
   }
   const t = forTenant(auth.tenantId);
   await transaction(async (session) => {
-
     if (barber) {
       await t.barbers.updateOne(
         { _id: barber._id },
@@ -82,7 +82,7 @@ export async function createTimeOff(
         .find(
           {
             branchId: branch._id,
-            status: "confirmed",
+            ...takesSlot(),
             startAt: { $lt: entry.endAt },
             endAt: { $gt: entry.startAt },
             ...(barber && { barberId: barber._id }),

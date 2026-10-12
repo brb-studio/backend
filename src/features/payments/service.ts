@@ -63,8 +63,8 @@ const view = (p: PaymentDoc) => ({
   status: p.status,
   amountMinor: p.amountMinor,
   currency: p.currency,
-  holder: p.bank.holder,
-  clabe: p.bank.clabe,
+  holder: p.bank?.holder ?? null,
+  clabe: p.bank?.clabe ?? null,
   createdAt: p.createdAt,
   expiresAt: p.expiresAt,
   ...(p.reference && { reference: p.reference }),
@@ -72,12 +72,13 @@ const view = (p: PaymentDoc) => ({
   ...(p.rejectionReason && { rejectionReason: p.rejectionReason }),
 });
 
+/** Manual transfers only: online payments expire with their booking (`payments/holds.ts`). */
 export async function expireStale(tenantId: ObjectId) {
   const t = forTenant(tenantId);
   const now = new Date();
   const stale = await collect(
     t.payments
-      .find({ status: "pending", expiresAt: { $lte: now } })
+      .find({ method: "spei", status: "pending", expiresAt: { $lte: now } })
       .project<Pick<PaymentDoc, "_id" | "appointmentId">>({
         appointmentId: 1,
       }),
@@ -166,7 +167,6 @@ export async function createTransfer(
       );
     });
   } catch (err) {
-
     const winner = isDuplicate(err) && (await open());
     if (winner) return view(winner);
     throw err;
@@ -180,7 +180,10 @@ export async function listPayments(tenant: TenantDoc, status: PaymentStatus) {
   const t = forTenant(tenant._id);
   await expireStale(tenant._id);
   const payments = await collect(
-    t.payments.find({ status }).sort({ createdAt: -1 }).limit(100),
+    t.payments
+      .find({ method: "spei", status })
+      .sort({ createdAt: -1 })
+      .limit(100),
   );
   const appointments = await mapBy(
     t.appointments
@@ -233,7 +236,7 @@ async function resolve(
 ) {
   const t = forTenant(tenant._id);
   await expireStale(tenant._id);
-  const payment = await t.payments.findOne({ _id: paymentId });
+  const payment = await t.payments.findOne({ _id: paymentId, method: "spei" });
   if (!payment) throw new AppError(404, "NOT_FOUND", "Not found");
   if (payment.status !== "pending") throw invalidTransition();
   const appointment = await t.appointments.findOne({

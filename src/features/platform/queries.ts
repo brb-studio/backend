@@ -146,7 +146,8 @@ function add(totals: Totals, a: Row, rates: Map<string, number>) {
     }
   } else if (a.status === "confirmed") totals.confirmed++;
   else if (a.status === "cancelled") totals.cancelled++;
-  else totals.noShow++;
+  else if (a.status === "no_show") totals.noShow++;
+  // `pending_payment` (an online booking not paid yet) is neither a cut nor a no-show.
   if (a.payment?.status === "paid") totals.collected += a.payment.amountMinor;
   if (!totals.lastAt || a.startAt > totals.lastAt) totals.lastAt = a.startAt;
 }

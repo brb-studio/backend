@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Document } from "mongodb";
 import { app } from "../src/app";
 import { appointments, timeOff } from "../src/db/collections";
+import { takesSlot } from "../src/features/availability/live";
 import {
   api,
   bookingShop,
@@ -102,13 +103,14 @@ describe("indexes", () => {
       appointments.find({
         tenantId: shop.tenant._id,
         barberId: { $in: [shop.tenant._id] },
-        status: "confirmed",
+        ...takesSlot(now),
         startAt: { $gte: now, $lt: new Date(now.getTime() + 864e5) },
         blockedUntil: { $gt: now },
       }),
     );
     expect(overlap.stages).toContain("IXSCAN");
-    expect(overlap.index).toContain("barber_start_confirmed_unique");
+    expect(overlap.stages).not.toContain("COLLSCAN");
+    expect(overlap.index).toContain("barber_start");
 
     const agenda = await winning(
       appointments.find({

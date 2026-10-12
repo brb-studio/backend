@@ -21,6 +21,7 @@ import {
   type Interval,
   startOfDay,
 } from "./engine";
+import { takesSlot } from "./live";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const STAFF_WINDOW_DAYS = 365;
@@ -97,7 +98,7 @@ export async function scheduleOf(
         .find(
           {
             barberId: { $in: barberIds },
-            status: "confirmed",
+            ...takesSlot(),
             startAt: {
               $gte: new Date(span.start - DAY_MS),
               $lt: new Date(span.end),

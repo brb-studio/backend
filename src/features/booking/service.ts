@@ -1,9 +1,4 @@
-import {
-  type ClientSession,
-  type Filter,
-  ObjectId,
-  type WithId,
-} from "mongodb";
+import { type ClientSession, type Filter, ObjectId } from "mongodb";
 import type * as z from "zod";
 import { hit } from "../../db/rate-limit";
 import {
@@ -12,15 +7,14 @@ import {
   type BranchDoc,
   type CustomerDoc,
   forTenant,
-  type NotificationDoc,
+  type PaymentDoc,
   type TenantDb,
   type TenantDoc,
   transaction,
 } from "../../db/scoped";
-import { collect, mapBy } from "../../shared/cursor";
+import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { photos } from "../../shared/photos";
-import { instantToLocal } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
 import { getUser } from "../auth/service";
 import { freeSlots, isBookable, localDate } from "../availability/engine";
@@ -34,7 +28,18 @@ import {
 import { ownBarberId } from "../barbers/service";
 import { canServe, type Request } from "../catalog/rules";
 import { resolveRequest } from "../catalog/service";
-import { deliverPush, notifyBarber } from "../notifications/service";
+import { notifyBarber, pushAfterCommit } from "../notifications/service";
+import { startCharge } from "../payments/checkout";
+import { holdMinutes, onlinePaymentsReady } from "../payments/connect";
+import {
+  type HoldRequest,
+  onlineCurrencyFor,
+  onlineOptions,
+  planPayment,
+  summaryOf,
+} from "../payments/holds";
+import { holdEnds, transferFits } from "../payments/rules";
+import { cancelHold, refundAfterCancel, sweepHolds } from "../payments/settle";
 import { resolveCommission } from "../platform/commission";
 import { priceFor, redeem, release } from "../promotions/service";
 import { getBranch } from "../tenancy/service";
@@ -52,6 +57,7 @@ import type {
   publicQuote,
   staffBooking,
 } from "./schemas";
+import { customerView, lookups, staffViews } from "./views";
 
 const HOUR_MS = 60 * 60 * 1000;
 const notFound = () => new AppError(404, "NOT_FOUND", "Not found");
@@ -118,10 +124,18 @@ type Placement = {
   source: "online" | "staff";
   createdBy?: ObjectId;
   now: number;
+  /** Online bookings only: whether the shop takes online payments, and what the customer chose to pay. */
+  online?: boolean;
+  hold?: HoldRequest;
 };
 
-async function place(tenant: TenantDoc, p: Placement) {
+async function place(
+  tenant: TenantDoc,
+  p: Placement,
+): Promise<{ appointment: AppointmentDoc; payment?: PaymentDoc }> {
   const t = forTenant(tenant._id);
+  // Expired holds are cancelled first, so the slot they took is free again for this booking.
+  await sweepHolds(tenant);
   const { items, durationMin, subtotalMinor, item } = snapshot(p.request);
   if (durationMin > MAX_DURATION_MIN) {
     throw new AppError(422, "TOO_LONG", "Longer than a workday");
@@ -207,9 +221,26 @@ async function place(tenant: TenantDoc, p: Placement) {
       createdAt: now,
       updatedAt: now,
     };
+    const payment = await planPayment(tenant, appointment, {
+      online: p.online === true,
+      hold: p.hold,
+      now,
+      session,
+    });
+    if (payment && p.hold) {
+      // Held, not confirmed: the barber hears about it once it is paid (`payments/holds.ts`).
+      appointment.status = "pending_payment";
+      appointment.paymentDeadline = p.hold.deadline;
+      appointment.payment = summaryOf(payment);
+    }
     await t.appointments.insertOne(appointment, { session }).catch((err) => {
       throw isDuplicate(err) ? slotTaken() : err;
     });
+    if (payment) {
+      const { tenantId: _, ...doc } = payment;
+      await t.payments.insertOne(doc, { session });
+      return { appointment, payment, notes: [] };
+    }
     const note = await notifyBarber(
       t,
       {
@@ -222,26 +253,10 @@ async function place(tenant: TenantDoc, p: Placement) {
       },
       session,
     );
-    return { appointment, notes: [note] };
+    return { appointment, payment: undefined, notes: [note] };
   });
   pushAfterCommit(tenant, booked.notes);
-  return booked.appointment;
-}
-
-function pushAfterCommit(
-  tenant: TenantDoc,
-  notes: (NotificationDoc | undefined)[],
-) {
-  const list = notes.filter((n): n is NotificationDoc => n !== undefined);
-  deliverPush(tenant, list).catch((err: unknown) =>
-    console.error(
-      JSON.stringify({
-        level: "error",
-        event: "push_failed",
-        message: String(err),
-      }),
-    ),
-  );
+  return { appointment: booked.appointment, payment: booked.payment };
 }
 
 export async function bookOnline(
@@ -276,7 +291,10 @@ export async function bookOnline(
     ? await customerForUser(t, signedIn)
     : await customerForGuest(t, input.customer ?? { name: "", phone: "" });
 
-  const appointment = await place(tenant, {
+  const now = Date.now();
+  const hold =
+    input.payment && holdFor(tenant, input.payment, input.startAt, now);
+  const { appointment, payment } = await place(tenant, {
     branch,
     barberId: barber._id,
     request,
@@ -285,9 +303,47 @@ export async function bookOnline(
     code: input.code,
     notes: input.notes,
     source: "online",
-    now: Date.now(),
+    now,
+    online: onlinePaymentsReady(tenant),
+    hold,
   });
-  return customerView(appointment, branch, barber, Date.now());
+  const checkout =
+    payment && (await startCharge(tenant, appointment, payment, customer));
+  const booked = checkout
+    ? { ...appointment, status: checkout.appointmentStatus }
+    : appointment;
+  return {
+    ...customerView(booked, branch, barber, Date.now()),
+    ...(checkout && { checkout }),
+  };
+}
+
+/** The customer's choice to pay online, checked before anything is held. */
+function holdFor(
+  tenant: TenantDoc,
+  choice: NonNullable<z.output<typeof publicBooking>["payment"]>,
+  startAt: Date,
+  now: number,
+): HoldRequest {
+  const accountId = tenant.stripeConnect?.accountId;
+  if (!onlinePaymentsReady(tenant) || !accountId) {
+    throw new AppError(
+      409,
+      "ONLINE_PAYMENT_UNAVAILABLE",
+      "This barbershop doesn't take online payments",
+    );
+  }
+  // Mexican bank transfers only take pesos: a shop charging in dollars takes cards only.
+  onlineCurrencyFor(tenant.currency, choice.method);
+  const deadline = holdEnds(choice.method, now, holdMinutes());
+  if (choice.method === "bank_transfer" && !transferFits(startAt, deadline)) {
+    throw new AppError(
+      409,
+      "TRANSFER_TOO_LATE",
+      "A transfer can't arrive before this appointment",
+    );
+  }
+  return { ...choice, deadline, accountId };
 }
 
 export async function bookAsStaff(
@@ -310,7 +366,7 @@ export async function bookAsStaff(
       { path: "customerId", message: "unknown customer" },
     ]);
   }
-  const appointment = await place(tenant, {
+  const { appointment } = await place(tenant, {
     branch,
     barberId: input.barberId,
     request,
@@ -368,6 +424,10 @@ export async function quote(
       },
     }),
     ...(price.rejected && { rejected: price.rejected }),
+    // How much paying online would charge and refund, computed here so the screen never guesses.
+    ...(onlinePaymentsReady(tenant) && {
+      online: onlineOptions(tenant, price.totalMinor),
+    }),
   };
 }
 
@@ -376,8 +436,10 @@ async function cancel(
   appointment: AppointmentDoc,
   by: ObjectId,
   reason: string | undefined,
+  who: "customer" | "staff",
 ) {
   const t = forTenant(tenant._id);
+  let cancelNoticeMin = 0;
   const notes = await transaction(async (session) => {
     const now = new Date();
     const result = await t.appointments.updateOne(
@@ -405,6 +467,7 @@ async function cancel(
       { _id: appointment.branchId },
       { session },
     );
+    cancelNoticeMin = branch?.booking.cancelNoticeMin ?? 0;
     const customer = await t.customers.findOne(
       { _id: appointment.customerId },
       { session },
@@ -426,10 +489,12 @@ async function cancel(
     ];
   });
   pushAfterCommit(tenant, notes);
+  await refundAfterCancel(tenant, appointment, who, cancelNoticeMin);
 }
 
 export async function listMine(tenant: TenantDoc, auth: Auth) {
   const t = forTenant(tenant._id);
+  await sweepHolds(tenant);
   const customer = await findCustomer(t, { userId: auth.userId });
   if (!customer) return [];
   const list = await collect(
@@ -452,6 +517,10 @@ export async function cancelMine(tenant: TenantDoc, auth: Auth, id: ObjectId) {
     customer &&
     (await t.appointments.findOne({ _id: id, customerId: customer._id }));
   if (!appointment) throw notFound();
+  // Not paid yet: giving it up frees the slot at once, whatever the notice.
+  if (appointment.status === "pending_payment") {
+    return cancelHold(tenant, appointment._id);
+  }
   if (appointment.status !== "confirmed") throw notConfirmed();
   const branch = await t.branches.findOne({ _id: appointment.branchId });
   const notice = (branch?.booking.cancelNoticeMin ?? 0) * 60_000;
@@ -462,7 +531,7 @@ export async function cancelMine(tenant: TenantDoc, auth: Auth, id: ObjectId) {
       "Too close to the appointment to cancel online",
     );
   }
-  await cancel(tenant, appointment, auth.userId, undefined);
+  await cancel(tenant, appointment, auth.userId, undefined, "customer");
 }
 
 async function ownAppointment(tenant: TenantDoc, auth: Auth, id: ObjectId) {
@@ -646,6 +715,7 @@ async function reschedule(
   change: { startAt?: Date; barberId?: ObjectId },
 ) {
   const t = forTenant(tenant._id);
+  await sweepHolds(tenant);
   const barberId = change.barberId ?? appointment.barberId;
   const startAt = change.startAt ?? appointment.startAt;
   if (auth.role === "barber" && !barberId.equals(appointment.barberId)) {
@@ -762,7 +832,7 @@ export async function updateAppointment(
   if (changesState && appointment.status !== "confirmed") throw notConfirmed();
 
   if (input.status === "cancelled") {
-    await cancel(tenant, appointment, auth.userId, input.cancelReason);
+    await cancel(tenant, appointment, auth.userId, input.cancelReason, "staff");
   } else if (input.status) {
     if (appointment.startAt.getTime() > Date.now()) {
       throw new AppError(409, "NOT_STARTED", "It hasn't started yet");
@@ -802,135 +872,4 @@ export async function updateAppointment(
     );
   }
   return getAppointment(auth, id);
-}
-
-/** What an appointment view shows of its branch and barber (and the cancel notice customers get). */
-type ViewBranch = WithId<Pick<BranchDoc, "slug" | "name" | "booking">>;
-type ViewBarber = WithId<Pick<BarberDoc, "slug" | "name">>;
-
-async function lookups(t: TenantDb, list: AppointmentDoc[]) {
-  const ids = (pick: (a: AppointmentDoc) => ObjectId) => [
-    ...new Map(list.map((a) => [pick(a).toHexString(), pick(a)])).values(),
-  ];
-  const [branches, barbers] = await Promise.all([
-    mapBy(
-      t.branches
-        .find({ _id: { $in: ids((a) => a.branchId) } })
-        .project<ViewBranch>({ slug: 1, name: 1, booking: 1 }),
-      (b) => b._id.toHexString(),
-    ),
-    mapBy(
-      t.barbers
-        .find({ _id: { $in: ids((a) => a.barberId) } })
-        .project<ViewBarber>({ slug: 1, name: 1 }),
-      (b) => b._id.toHexString(),
-    ),
-  ]);
-  return {
-    branchOf: (id: ObjectId) => branches.get(id.toHexString()),
-    barberOf: (id: ObjectId) => barbers.get(id.toHexString()),
-  };
-}
-
-function baseView(
-  a: AppointmentDoc,
-  branch: ViewBranch | undefined,
-  barber: ViewBarber | undefined,
-) {
-  return {
-    id: a._id.toHexString(),
-    status: a.status,
-    startAt: a.startAt,
-    endAt: a.endAt,
-    timeZone: a.timeZone,
-    start: instantToLocal(a.startAt, a.timeZone),
-    end: instantToLocal(a.endAt, a.timeZone),
-    branch: branch && { slug: branch.slug, name: branch.name },
-    barber: barber && { slug: barber.slug, name: barber.name },
-    items: a.items.map((item) =>
-      item.kind === "service"
-        ? {
-            kind: item.kind,
-            name: item.name,
-            durationMin: item.durationMin,
-            priceMinor: item.priceMinor,
-          }
-        : {
-            kind: item.kind,
-            name: item.name,
-            durationMin: item.durationMin,
-            priceMinor: item.priceMinor,
-            services: item.services.map((s) => ({
-              name: s.name,
-              durationMin: s.durationMin,
-            })),
-          },
-    ),
-    currency: a.currency,
-    subtotalMinor: a.subtotalMinor,
-    discountMinor: a.discountMinor,
-    totalMinor: a.totalMinor,
-    payment: a.payment
-      ? {
-          status: a.payment.status,
-          amountMinor: a.payment.amountMinor,
-        }
-      : null,
-    ...(a.promotion && {
-      promotion: {
-        code: a.promotion.code,
-        name: a.promotion.name,
-        amountMinor: a.promotion.amountMinor,
-      },
-    }),
-    notes: a.notes,
-    createdAt: a.createdAt,
-  };
-}
-
-function customerView(
-  a: AppointmentDoc,
-  branch: ViewBranch | undefined,
-  barber: ViewBarber | undefined,
-  now: number,
-) {
-  const notice = (branch?.booking.cancelNoticeMin ?? 0) * 60_000;
-  return {
-    ...baseView(a, branch, barber),
-    cancellable:
-      a.status === "confirmed" && now <= a.startAt.getTime() - notice,
-  };
-}
-
-async function staffViews(t: TenantDb, list: AppointmentDoc[]) {
-  const [{ branchOf, barberOf }, personOf] = await Promise.all([
-    lookups(t, list),
-    mapBy(
-      t.customers
-        .find({ _id: { $in: list.map((a) => a.customerId) } })
-        .project<WithId<Pick<CustomerDoc, "name" | "phone" | "email">>>({
-          name: 1,
-          phone: 1,
-          email: 1,
-        }),
-      (c) => c._id.toHexString(),
-    ),
-  ]);
-  return list.map((a) => {
-    const customer = personOf.get(a.customerId.toHexString());
-    return {
-      ...baseView(a, branchOf(a.branchId), barberOf(a.barberId)),
-      branchId: a.branchId.toHexString(),
-      barberId: a.barberId.toHexString(),
-      customer: customer && {
-        id: customer._id.toHexString(),
-        name: customer.name,
-        phone: customer.phone,
-        email: customer.email,
-      },
-      source: a.source,
-      cancelledAt: a.cancelledAt,
-      cancelReason: a.cancelReason,
-    };
-  });
 }

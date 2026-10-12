@@ -25,7 +25,7 @@ El sistema SHALL identificar el tenant únicamente a partir del host de la petic
 - **THEN** la respuesta es 422 `VALIDATION` y no se procesa nada
 
 ### Requirement: Vista pública de la barbería
-El sistema SHALL exponer en `GET /v1/public/tenant`, sin sesión: nombre, moneda, idiomas, idioma por defecto, tema, marca, sucursales activas ordenadas por nombre e indicador `payments.transfer` (transferencias habilitadas). El sistema MUST NOT exponer en esta vista la suscripción, los identificadores de Stripe ni datos internos.
+El sistema SHALL exponer en `GET /v1/public/tenant`, sin sesión: nombre, moneda, idiomas, idioma por defecto, tema, marca, sucursales activas ordenadas por nombre e indicadores `payments.transfer` (transferencias manuales habilitadas) y `payments.online` (pagos con Stripe; con él, la regla de anticipo y los minutos de apartado). El sistema MUST NOT exponer en esta vista la suscripción, los identificadores de Stripe ni datos internos.
 
 #### Scenario: Visitante sin sesión
 - **WHEN** un visitante pide la barbería pública
