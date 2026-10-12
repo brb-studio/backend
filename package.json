@@ -1,5 +1,5 @@
 {
-  "name": "magicstudio-backend",
+  "name": "brb-studio-backend",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.2",

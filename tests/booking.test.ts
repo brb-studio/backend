@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
-import { appointments, customers, tenants } from "../src/db/collections";
+import { appointments, tenants, users } from "../src/db/collections";
 import { PLAN_LIMITS } from "../src/features/tenancy/subscription";
 import {
   api,
@@ -58,7 +58,7 @@ describe("online booking", () => {
       }),
     );
     expect(again.status).toBe(201);
-    const records = await customers
+    const records = await users
       .find({ tenantId: shop.tenant._id, phone })
       .toArray();
     expect(records).toHaveLength(1);

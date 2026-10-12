@@ -34,6 +34,7 @@ import {
   paymentStaffRoutes,
 } from "./features/payments/routes";
 import { stripeWebhookRoutes } from "./features/payments/webhook";
+import { cronRoutes } from "./features/platform/cron";
 import { platformRoutes } from "./features/platform/routes";
 import { earningsRoutes } from "./features/platform/tenant-routes";
 import { promotionRoutes } from "./features/promotions/routes";
@@ -116,6 +117,7 @@ export const app = new Hono<Env>()
   .route("/platform", platformRoutes)
   // Stripe calls this without a tenant host: the tenant comes from each payment's metadata, checked against the database.
   .route("/webhooks", stripeWebhookRoutes)
+  .route("/cron", cronRoutes)
   .use("/v1/*", resolveTenant, authenticate)
   .route("/v1/auth", authRoutes)
   .route("/v1/public", publicRoutes)

@@ -1,6 +1,6 @@
-# MagicStudio backend
+# brb-studio backend
 
-API for MagicStudio, a multi-tenant SaaS for barbershops. Bun · Hono · Zod · MongoDB. The frontend is [brb-studio/frontend](https://github.com/brb-studio/frontend), cloned next to this repo as `../frontend`, and calls this API from its server, never from the browser.
+API for brb-studio, a multi-tenant SaaS for barbershops. Bun · Hono · Zod · MongoDB. The frontend is [brb-studio/frontend](https://github.com/brb-studio/frontend), cloned next to this repo as `../frontend`, and calls this API from its server, never from the browser.
 
 ## Requirements
 
@@ -80,15 +80,17 @@ Every `/v1` request needs the tenant's host in `X-Tenant-Host` or `X-Forwarded-H
 | `POST /v1/time-off` · `DELETE /v1/time-off/:id` | staff | `{ barberId \| branchId, start, end, kind, reason? }` with `start`/`end` as local `YYYY-MM-DDTHH:MM` in the branch's timezone; `branchId` + `kind: "closure"` closes the whole branch. Barbers manage only their own |
 | `GET /v1/public/availability?branch=&service=\|package=&barber=&from=&days=` | anyone | Free start times per barber and day (`from` local `YYYY-MM-DD`, `days` 1–31, capped by the branch's booking window and minimum notice) |
 | `POST /v1/public/quote` | anyone | `{ branch, service\|package, code?, phone? }` → list price, discount and total; with `phone`, first-visit promotions are checked against that customer. 30 per IP per 10 min |
-| `POST /v1/public/appointments` | anyone | `{ branch, barber, service\|package, startAt, customer?, code?, notes?, payment? }`. Signed-in customers book as themselves; guests send `customer: { name, phone, email? }` (matched by phone). 409 `SLOT_TAKEN`, `BARBER_UNAVAILABLE`, `PROMOTION_UNAVAILABLE`; 20 per IP and 5 per customer per hour. With `payment: { kind: deposit\|full, method: card\|bank_transfer }` (shop with Stripe active) the appointment is `pending_payment`, holds the slot until `paymentDeadline` and the response has `checkout` (`clientSecret` for cards, Stripe's CLABE for transfers); 422 `PAYMENT_REQUIRED` when the shop asks for a deposit, 409 `ONLINE_PAYMENT_UNAVAILABLE`, `TRANSFER_TOO_LATE`, 502 `PAYMENT_PROVIDER_ERROR` |
+| `POST /v1/public/appointments` | anyone | `{ branch, barber, service\|package, startAt, customer?, code?, notes?, payment? }`. Signed-in customers book as themselves; guests send `customer: { name, phone, email? }` (a per-shop guest record keyed by phone; never matched to an account, since contact data is not verified). 409 `SLOT_TAKEN`, `BARBER_UNAVAILABLE`, `PROMOTION_UNAVAILABLE`; 20 per IP and 5 per customer per hour. With `payment: { kind: deposit\|full, method: card\|bank_transfer }` (shop with Stripe active) the appointment is `pending_payment`, holds the slot until `paymentDeadline` and the response has `checkout` (`clientSecret` for cards, Stripe's CLABE for transfers); 422 `PAYMENT_REQUIRED` when the shop asks for a deposit, 409 `ONLINE_PAYMENT_UNAVAILABLE`, `TRANSFER_TOO_LATE`, 502 `PAYMENT_PROVIDER_ERROR` |
 | `GET /v1/me/appointments` · `POST /v1/me/appointments/:id/cancel` | customer | Own appointments; cancel until the branch's `cancelNoticeMin` (409 `TOO_LATE`) |
 | `GET /v1/availability?branchId=&serviceId=\|packageId=&barberId=&from=&days=` | staff | Same engine, no booking window or notice limits (up to 365 days ahead) |
 | `GET /v1/appointments?branchId=&barberId=&from=&to=` · `GET /v1/appointments/:id` | staff | Range at most 62 days. Barbers see their own, managers their branch |
+| `GET /v1/appointments/my-day` | staff | The caller's own confirmed/completed cuts for today on their branch's clock (any role linked to a barber profile); `{ "barber": null }` if not linked |
 | `POST /v1/appointments` | staff | Walk-ins and phone bookings: ids instead of slugs, `customerId` or `customer` |
 | `PATCH /v1/appointments/:id` | staff | Either `status` (`completed`, `cancelled`, `no_show`) or a reschedule (`startAt`, `barberId`), plus `notes`. Only confirmed appointments change (409 `NOT_CONFIRMED`); `completed` / `no_show` only after it started |
 | `GET /v1/promotions` · `GET /v1/promotions/:id` · `POST` · `PATCH /v1/promotions/:id` | staff · owner/admin | `percent` (1–100) or `fixed` (minor units); optional `code`, dates, branches, services/packages, `firstVisitOnly`, `maxRedemptions`. No code = applied automatically; the best discount wins |
-| `GET /v1/notifications` · `POST /v1/notifications/read` | staff | Latest notifications of the caller; mark some or all as read |
-| `GET /v1/notifications/stream` | staff | Server-Sent Events: `ready`, `notification`, `ping` every 15 s |
+| `GET /v1/notifications` · `POST /v1/notifications/read` | any account | Latest notifications of the caller; mark some or all as read |
+| `GET /cron/digest` | cron (`CRON_SECRET`) | Sends the morning summary push (today's appointments and SPEI transfers to confirm) to owners/admins; 404 without the secret. A long-running server also runs it every 10 min on its own |
+| `GET /v1/notifications/stream` | any account | Server-Sent Events: `ready`, `notification`, `ping` every 15 s |
 | `POST /v1/images` | owner/admin/manager | Raw bytes (JPEG, PNG or WebP, ≤ 1 MB; the type is read from the bytes, SVG refused) → `{ id }`. 500 per tenant, 60 per user per hour. Store `/api/images/<id>` (the frontend's path) in an `image` field |
 | `GET /images/:id` | anyone | Outside `/v1` (no tenant): the photo, `Cache-Control: immutable`. Ids are 128-bit random |
 | `POST /v1/public/payments/transfer` | anyone (guest: `paymentToken`; customer: own appointments) | `{ appointmentId, paymentToken? }` → the pending transfer `{ id, amountMinor, currency, holder, clabe, expiresAt }`. 409 `TRANSFER_NOT_AVAILABLE` / `ALREADY_PAID`, 422 `NOTHING_TO_CHARGE`, 429 |
@@ -110,7 +112,7 @@ Every `/v1` request needs the tenant's host in `X-Tenant-Host` or `X-Forwarded-H
 | `GET /platform/options?tenantId=&branchId=` | platform staff | Names for the filters |
 | `PATCH /platform/barbers/:id/commission` | platform staff | `{ commissionBps: 0–10000 \| null }`; `null` removes the rate |
 | `POST /platform/payouts` | platform staff | `{ barberId, appointmentIds, reference?, paidAt? }` settles completed cuts; the amount is the sum of their commissions. 409 `COMMISSION_NOT_CONFIGURED`, `INVALID_APPOINTMENTS`, `ALREADY_PAID` |
-| `GET /v1/notifications/push-key` · `POST` · `DELETE /v1/notifications/push-subscriptions` | staff | VAPID public key (404 `PUSH_DISABLED` without keys) and the browser's push subscription |
+| `GET /v1/notifications/push-key` · `POST` · `DELETE /v1/notifications/push-subscriptions` | any account | VAPID public key (404 `PUSH_DISABLED` without keys) and the browser's push subscription |
 
 Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or ended more than 7 days ago. Sessions last 30 days and renew once past half their life.
 
@@ -130,7 +132,7 @@ Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or e
 - **Catalog:** a package stores only its own price and the ordered service ids. Its duration and list price are always computed from the current services. Who can do what is one pure rule (`catalog/rules.ts` → `offers`), shared by the catalog, the barber filter and booking.
 - **Snapshots:** appointments embed name, duration and price of every service and package, plus the discount terms, at booking time. History never reads the live catalog.
 - **Promotions:** pure rules (`promotions/rules.ts`), one `priceFor()` for quote and booking, so the price shown is the price charged. A redemption is a conditional `$inc` inside the booking transaction (`maxRedemptions` can't be exceeded); cancelling gives it back.
-- **Notifications:** the barber's notification is written in the booking transaction (no booking without its notice). Live: one MongoDB change stream per process feeds every open SSE connection, so it works across instances with no broker. Phones: Web Push (RFC 8291 encryption + VAPID) with `node:crypto`, no package; sent after commit in chunks of 20; 404/410 from the push service deletes the subscription; only known push-service hosts are accepted (no SSRF).
+- **Notifications:** the barber's notification (and the customer's, when staff or the payment provider change their visit; never for guests or for their own actions) is written in the booking transaction (no booking without its notice). Live: one MongoDB change stream per process feeds every open SSE connection, so it works across instances with no broker. Phones: Web Push (RFC 8291 encryption + VAPID) with `node:crypto`, no package; sent after commit in chunks of 20; 404/410 from the push service deletes the subscription; only known push-service hosts are accepted (no SSRF).
 - **Rate limits:** fixed windows in the `rateLimits` collection: one atomic upsert per attempt, so every API instance shares the count (30 concurrent attempts against a limit of 20 let exactly 20 through). Keys are SHA-256 hashed (no emails or phones stored); a TTL index drops old windows.
 - **Visitor IP:** only the frontend's server may state it: it sends `X-Visitor-IP` (or `X-Forwarded-For`, which Vercel overwrites) plus `X-Proxy-Secret` (`PROXY_SECRET`, required in production). Without the secret the API uses the socket address, so a forged header can't dodge a limit. The frontend picks the IP its own proxies wrote (`TRUSTED_PROXY_HOPS`).
 - **Performance:** the availability engine converts timezones once per window instead of per slot (30 barbers × 31 days in ~6 ms), so it stays on the main thread; no workers needed.
@@ -156,7 +158,7 @@ src/
     barbers/    barber profiles, weekly hours, services they do, time off
     catalog/    services, packages, public catalog; rules.ts (pure: who can do what, totals)
     availability/ engine.ts (pure: free slots) + loading schedules
-    booking/    appointments, customers, snapshots (order.ts), cancel, reschedule
+    booking/    appointments, guest customers (customers.ts), snapshots (order.ts), cancel, reschedule
     promotions/ rules.ts (pure) + pricing and redemptions
     notifications/ in-app notifications, SSE stream, Web Push subscriptions
     platform/   global staff dashboard: auth, aggregations, commission (pure), payouts
@@ -174,3 +176,21 @@ The same as the frontend: exact pins, versions younger than 3 days refused (`bun
 ## Specs (OpenSpec)
 
 Business rules live as behavior specs in `openspec/specs/` (13 capabilities: platform-dashboard, tenancy, accounts-access, barbers-schedule, catalog, availability, booking, promotions, notifications, appointment-payments, subscription-billing, media, platform-safety), written from the code. `openspec list --specs` lists them, `openspec validate --specs --strict` checks them, and changes start with `/opsx:propose` in Claude Code. Update the spec in the same change as the code.
+
+## Identity model: users, guests, no `customers`
+
+`users` is the only identity collection and is per barbershop: a person with N shops has N independent
+accounts (same or different email/password), and nothing links them because emails are not verified.
+Customers who book without signing up are `guest: true` records (no `email`/`passwordHash`, `contactEmail`
+for the address they typed, unique per `tenantId+phone`) that can't sign in. `appointments.customerId`
+is always a `users._id` of the same tenant. Signing up never claims a guest by phone.
+
+Existing data: `bun scripts/migrate-customers.ts` (dry run) / `--apply` folds the legacy `customers`
+collection into `users` (idempotent, deletes nothing; `customers` stays as backup until you drop it).
+
+## Verificación de correo y recuperación de contraseña
+
+`POST /v1/auth/verify-email` · `verify-email/request` · `password/forgot` · `password/reset` (ver
+`openspec/specs/accounts-access`). Los enlaces apuntan a `/{lang}/verify-email` y `/{lang}/reset-password` del
+frontend de la barbería. Correo vía Resend (`RESEND_API_KEY` + `MAIL_FROM`); sin configurar, en desarrollo el
+correo se imprime en la consola del backend.

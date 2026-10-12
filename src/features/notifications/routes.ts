@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import * as z from "zod";
 import { subscribe } from "../../db/notification-hub";
-import { type Env, objectId, readJson } from "../../shared/http";
+import { type Env, objectId, parse, readJson } from "../../shared/http";
 import { isPushEndpoint } from "../../shared/web-push";
 import { STAFF } from "../auth/policy";
 import { authOf, requireRole } from "../auth/routes";
@@ -37,11 +37,18 @@ const pushSubscription = z.object({
   keys: z.object({ p256dh: bytes(65, 4), auth: bytes(16) }),
 });
 
+const listQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(50),
+});
+
 const HEARTBEAT_MS = 15_000;
 
 export const notificationRoutes = new Hono<Env>()
-  .use(requireRole(...STAFF))
-  .get("/", async (c) => c.json(await listNotifications(authOf(c))))
+  .use(requireRole(...STAFF, "customer"))
+  .get("/", async (c) =>
+    c.json(await listNotifications(authOf(c), parse(listQuery, c.req.query()))),
+  )
   .post("/read", async (c) => {
     const { ids } = await readJson(
       c,

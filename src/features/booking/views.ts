@@ -3,8 +3,8 @@ import type {
   AppointmentDoc,
   BarberDoc,
   BranchDoc,
-  CustomerDoc,
   TenantDb,
+  UserDoc,
 } from "../../db/scoped";
 import { mapBy } from "../../shared/cursor";
 import { instantToLocal } from "../../shared/time";
@@ -144,12 +144,15 @@ export async function staffViews(t: TenantDb, list: AppointmentDoc[]) {
   const [{ branchOf, barberOf }, personOf] = await Promise.all([
     lookups(t, list),
     mapBy(
-      t.customers
+      t.users
         .find({ _id: { $in: list.map((a) => a.customerId) } })
-        .project<WithId<Pick<CustomerDoc, "name" | "phone" | "email">>>({
+        .project<
+          WithId<Pick<UserDoc, "name" | "phone" | "email" | "contactEmail">>
+        >({
           name: 1,
           phone: 1,
           email: 1,
+          contactEmail: 1,
         }),
       (c) => c._id.toHexString(),
     ),
@@ -164,7 +167,7 @@ export async function staffViews(t: TenantDb, list: AppointmentDoc[]) {
         id: customer._id.toHexString(),
         name: customer.name,
         phone: customer.phone,
-        email: customer.email,
+        email: customer.email ?? customer.contactEmail,
       },
       source: a.source,
       cancelledAt: a.cancelledAt,

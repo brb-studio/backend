@@ -5,7 +5,7 @@ context: |
   All artifacts must be written in es.
   Keep OpenSpec structural headings and SHALL/MUST keywords in English.
 
-  Proyecto: MagicStudio backend, API de un SaaS multi-barbería y multi-sucursal. Una empresa
+  Proyecto: brb-studio backend, API de un SaaS multi-barbería y multi-sucursal. Una empresa
   compró la app (plan lifetime); las demás barberías la rentan por suscripción mensual.
   El frontend (Next.js) es el repo brb-studio/frontend, clonado junto a este como ../frontend,
   y llama a esta API solo desde su servidor.

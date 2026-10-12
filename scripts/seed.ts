@@ -1,4 +1,3 @@
-
 import { parseArgs } from "node:util";
 import { ObjectId } from "mongodb";
 import { config } from "../src/config";
@@ -165,7 +164,7 @@ function builders(tenantId: ObjectId) {
   };
 }
 
-function magicstudio(): Seed {
+function brbStudio(): Seed {
   const tenantId = new ObjectId();
   const make = builders(tenantId);
   const centro = make.branch({
@@ -418,7 +417,7 @@ function elite(): Seed {
 }
 
 const seeded: Seed[] = [];
-for (const seed of [magicstudio(), elite()]) {
+for (const seed of [brbStudio(), elite()]) {
   if (await tenants.findOne({ slug: seed.tenant.slug })) {
     console.log(
       `"${seed.tenant.slug}" already exists in "${db.databaseName}"; skipped.`,

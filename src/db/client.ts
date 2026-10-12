@@ -2,7 +2,7 @@ import { MongoClient } from "mongodb";
 import { config } from "../config";
 
 export const client = new MongoClient(config.MONGO_URL, {
-  appName: "magicstudio-backend",
+  appName: "brb-studio-backend",
   serverSelectionTimeoutMS: 5_000,
   ignoreUndefined: true,
   maxPoolSize: 10,

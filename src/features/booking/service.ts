@@ -5,12 +5,12 @@ import {
   type AppointmentDoc,
   type BarberDoc,
   type BranchDoc,
-  type CustomerDoc,
   forTenant,
   type PaymentDoc,
   type TenantDb,
   type TenantDoc,
   transaction,
+  type UserDoc,
 } from "../../db/scoped";
 import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
@@ -28,7 +28,11 @@ import {
 import { ownBarberId } from "../barbers/service";
 import { canServe, type Request } from "../catalog/rules";
 import { resolveRequest } from "../catalog/service";
-import { notifyBarber, pushAfterCommit } from "../notifications/service";
+import {
+  notifyBarber,
+  notifyCustomer,
+  pushAfterCommit,
+} from "../notifications/service";
 import { startCharge } from "../payments/checkout";
 import { holdMinutes, onlinePaymentsReady } from "../payments/connect";
 import {
@@ -43,7 +47,7 @@ import { cancelHold, refundAfterCancel, sweepHolds } from "../payments/settle";
 import { resolveCommission } from "../platform/commission";
 import { priceFor, redeem, release } from "../promotions/service";
 import { getBranch } from "../tenancy/service";
-import { customerForGuest, customerForUser, findCustomer } from "./customers";
+import { customerForGuest, findGuest } from "./customers";
 import {
   bookedMinutes,
   bookedServiceIds,
@@ -118,13 +122,12 @@ type Placement = {
   barberId: ObjectId;
   request: Request;
   startAt: Date;
-  customer: CustomerDoc;
+  customer: UserDoc;
   code?: string;
   notes?: string;
   source: "online" | "staff";
   createdBy?: ObjectId;
   now: number;
-  /** Online bookings only: whether the shop takes online payments, and what the customer chose to pay. */
   online?: boolean;
   hold?: HoldRequest;
 };
@@ -134,7 +137,6 @@ async function place(
   p: Placement,
 ): Promise<{ appointment: AppointmentDoc; payment?: PaymentDoc }> {
   const t = forTenant(tenant._id);
-  // Expired holds are cancelled first, so the slot they took is free again for this booking.
   await sweepHolds(tenant);
   const { items, durationMin, subtotalMinor, item } = snapshot(p.request);
   if (durationMin > MAX_DURATION_MIN) {
@@ -228,7 +230,6 @@ async function place(
       session,
     });
     if (payment && p.hold) {
-      // Held, not confirmed: the barber hears about it once it is paid (`payments/holds.ts`).
       appointment.status = "pending_payment";
       appointment.paymentDeadline = p.hold.deadline;
       appointment.payment = summaryOf(payment);
@@ -253,7 +254,18 @@ async function place(
       },
       session,
     );
-    return { appointment, payment: undefined, notes: [note] };
+    // Online customers watch the confirmation on screen; only a visit booked for them is news.
+    const toCustomer =
+      p.source === "staff"
+        ? await notifyCustomer(
+            t,
+            "customer.booked",
+            appointment,
+            session,
+            p.createdBy,
+          )
+        : undefined;
+    return { appointment, payment: undefined, notes: [note, toCustomer] };
   });
   pushAfterCommit(tenant, booked.notes);
   return { appointment: booked.appointment, payment: booked.payment };
@@ -287,9 +299,9 @@ export async function bookOnline(
   }
   const who = signedIn ? String(signedIn._id) : (input.customer?.phone ?? "");
   if (!(await hit(`book:${tenant._id}:${who}`, 5, HOUR_MS))) throw tooMany();
-  const customer = signedIn
-    ? await customerForUser(t, signedIn)
-    : await customerForGuest(t, input.customer ?? { name: "", phone: "" });
+  const customer =
+    signedIn ??
+    (await customerForGuest(t, input.customer ?? { name: "", phone: "" }));
 
   const now = Date.now();
   const hold =
@@ -318,7 +330,6 @@ export async function bookOnline(
   };
 }
 
-/** The customer's choice to pay online, checked before anything is held. */
 function holdFor(
   tenant: TenantDoc,
   choice: NonNullable<z.output<typeof publicBooking>["payment"]>,
@@ -333,7 +344,7 @@ function holdFor(
       "This barbershop doesn't take online payments",
     );
   }
-  // Mexican bank transfers only take pesos: a shop charging in dollars takes cards only.
+
   onlineCurrencyFor(tenant.currency, choice.method);
   const deadline = holdEnds(choice.method, now, holdMinutes());
   if (choice.method === "bank_transfer" && !transferFits(startAt, deadline)) {
@@ -357,7 +368,7 @@ export async function bookAsStaff(
     auth.role === "barber" ? ownBarberId(auth) : undefined,
     resolveRequest(tenant._id, input),
     input.customerId
-      ? t.customers.findOne({ _id: input.customerId })
+      ? t.users.findOne({ _id: input.customerId, role: "customer" })
       : input.customer && customerForGuest(t, input.customer),
   ]);
   if (auth.role === "barber" && !own?.equals(input.barberId)) throw forbidden();
@@ -393,12 +404,9 @@ export async function quote(
   const [branch, request, customer] = await Promise.all([
     t.branches.findOne({ slug: input.branch, active: true }),
     resolveRequest(tenant._id, input),
-    findCustomer(
-      t,
-      auth?.role === "customer"
-        ? { userId: auth.userId }
-        : { phone: input.phone },
-    ),
+    auth?.role === "customer"
+      ? { _id: auth.userId }
+      : findGuest(t, input.phone),
   ]);
   if (!branch) throw notFound();
   const { durationMin, subtotalMinor, item } = snapshot(request);
@@ -424,7 +432,6 @@ export async function quote(
       },
     }),
     ...(price.rejected && { rejected: price.rejected }),
-    // How much paying online would charge and refund, computed here so the screen never guesses.
     ...(onlinePaymentsReady(tenant) && {
       online: onlineOptions(tenant, price.totalMinor),
     }),
@@ -468,11 +475,18 @@ async function cancel(
       { session },
     );
     cancelNoticeMin = branch?.booking.cancelNoticeMin ?? 0;
-    const customer = await t.customers.findOne(
+    const customer = await t.users.findOne(
       { _id: appointment.customerId },
       { session },
     );
-    if (!barber || !branch) return [];
+    const toCustomer = await notifyCustomer(
+      t,
+      "customer.cancelled",
+      appointment,
+      session,
+      by,
+    );
+    if (!barber || !branch) return [toCustomer];
     return [
       await notifyBarber(
         t,
@@ -486,6 +500,7 @@ async function cancel(
         },
         session,
       ),
+      toCustomer,
     ];
   });
   pushAfterCommit(tenant, notes);
@@ -495,11 +510,9 @@ async function cancel(
 export async function listMine(tenant: TenantDoc, auth: Auth) {
   const t = forTenant(tenant._id);
   await sweepHolds(tenant);
-  const customer = await findCustomer(t, { userId: auth.userId });
-  if (!customer) return [];
   const list = await collect(
     t.appointments
-      .find({ customerId: customer._id })
+      .find({ customerId: auth.userId })
       .sort({ startAt: -1 })
       .limit(50),
   );
@@ -512,12 +525,11 @@ export async function listMine(tenant: TenantDoc, auth: Auth) {
 
 export async function cancelMine(tenant: TenantDoc, auth: Auth, id: ObjectId) {
   const t = forTenant(tenant._id);
-  const customer = await findCustomer(t, { userId: auth.userId });
-  const appointment =
-    customer &&
-    (await t.appointments.findOne({ _id: id, customerId: customer._id }));
+  const appointment = await t.appointments.findOne({
+    _id: id,
+    customerId: auth.userId,
+  });
   if (!appointment) throw notFound();
-  // Not paid yet: giving it up frees the slot at once, whatever the notice.
   if (appointment.status === "pending_payment") {
     return cancelHold(tenant, appointment._id);
   }
@@ -536,10 +548,10 @@ export async function cancelMine(tenant: TenantDoc, auth: Auth, id: ObjectId) {
 
 async function ownAppointment(tenant: TenantDoc, auth: Auth, id: ObjectId) {
   const t = forTenant(tenant._id);
-  const customer = await findCustomer(t, { userId: auth.userId });
-  const appointment =
-    customer &&
-    (await t.appointments.findOne({ _id: id, customerId: customer._id }));
+  const appointment = await t.appointments.findOne({
+    _id: id,
+    customerId: auth.userId,
+  });
   if (!appointment) throw notFound();
   if (appointment.status !== "confirmed") throw notConfirmed();
   return appointment;
@@ -779,7 +791,7 @@ async function reschedule(
       });
     if (!moved) throw notConfirmed();
 
-    const customer = await t.customers.findOne(
+    const customer = await t.users.findOne(
       { _id: moved.customerId },
       { session },
     );
@@ -796,7 +808,14 @@ async function reschedule(
       },
       session,
     );
-    if (barber._id.equals(appointment.barberId)) return [toNew];
+    const toCustomer = await notifyCustomer(
+      t,
+      "customer.rescheduled",
+      moved,
+      session,
+      auth.userId,
+    );
+    if (barber._id.equals(appointment.barberId)) return [toNew, toCustomer];
     const previous = await t.barbers.findOne(
       { _id: appointment.barberId },
       { session },
@@ -815,7 +834,7 @@ async function reschedule(
         },
         session,
       ));
-    return [toNew, toPrevious ?? undefined];
+    return [toNew, toPrevious ?? undefined, toCustomer];
   });
   pushAfterCommit(tenant, notes);
 }

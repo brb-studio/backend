@@ -21,6 +21,7 @@ describe("register and login", () => {
       phone: "+526641234567",
       role: "customer",
       active: true,
+      emailVerified: false,
     });
     expect(String(res.body.token)).toHaveLength(43);
 
@@ -108,7 +109,7 @@ describe("register and login", () => {
       tenantId: tenant._id,
       email: "ana@example.com",
     });
-    expect(doc?.passwordHash.startsWith("$argon2id$")).toBe(true);
+    expect(doc?.passwordHash?.startsWith("$argon2id$")).toBe(true);
     expect(JSON.stringify(res.body)).not.toContain("passwordHash");
     expect(JSON.stringify(res.body)).not.toContain(ana.password);
     expect(await sessions.findOne({ _id: token })).toBeNull();

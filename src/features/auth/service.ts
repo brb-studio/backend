@@ -7,7 +7,7 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const LOGIN_ATTEMPTS = 10;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
-const sha256 = (token: string) =>
+export const sha256 = (token: string) =>
   new Bun.CryptoHasher("sha256").update(token).digest("hex");
 
 export const randomToken = (bytes: number) =>
@@ -140,7 +140,10 @@ export async function changePassword(
     );
   }
   const user = await getUser(auth);
-  if (!(await Bun.password.verify(current, user.passwordHash))) {
+  if (
+    !user.passwordHash ||
+    !(await Bun.password.verify(current, user.passwordHash))
+  ) {
     throw new AppError(403, "WRONG_PASSWORD", "Current password is wrong");
   }
   await forTenant(auth.tenantId).users.updateOne(
@@ -173,5 +176,6 @@ export const toUser = (user: UserDoc) => ({
   ...(user.phone && { phone: user.phone }),
   role: user.role,
   active: user.active,
+  emailVerified: Boolean(user.emailVerifiedAt),
   ...(user.branchId && { branchId: user.branchId.toHexString() }),
 });

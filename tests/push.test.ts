@@ -7,6 +7,7 @@ import {
 } from "node:crypto";
 import { ObjectId } from "mongodb";
 import { pushSubscriptions } from "../src/db/collections";
+import { sendDigest } from "../src/features/notifications/digest";
 import {
   api,
   bookingShop,
@@ -128,7 +129,10 @@ describe("web push", () => {
     expect(headers.get("authorization")).toStartWith("vapid t=");
     expect(headers.get("urgency")).toBe("high");
     const message = phone.decrypt(Buffer.from(init?.body as Uint8Array));
-    expect(message).toMatchObject({ title: "Nueva cita", url: "/es/account" });
+    expect(message).toMatchObject({
+      title: `Nueva cita · ${shop.tenant.name}`,
+      url: "/es/account",
+    });
     expect(message.body).toContain("Ana López");
     expect(message.body).toContain("corte");
   });
@@ -157,7 +161,7 @@ describe("web push", () => {
     );
   });
 
-  test("only push service endpoints and well-formed keys; staff only", async () => {
+  test("only push service endpoints and well-formed keys; signed-in accounts only", async () => {
     const shop = await bookingShop();
     const barber = await barberAccount(shop);
     const good = fakeBrowser(
@@ -178,6 +182,14 @@ describe("web push", () => {
         ).status,
       ).toBe(422);
     }
+    expect(
+      (
+        await api("POST", "/v1/notifications/push-subscriptions", {
+          host: shop.host,
+          body: good,
+        })
+      ).status,
+    ).toBe(401);
     const customer = await createUser(shop.tenant, "customer");
     expect(
       (
@@ -187,7 +199,7 @@ describe("web push", () => {
           body: good,
         })
       ).status,
-    ).toBe(403);
+    ).toBe(204);
     const key = await api("GET", "/v1/notifications/push-key", barber);
     expect(key.body.publicKey).toBe(process.env.VAPID_PUBLIC_KEY);
   });
@@ -224,5 +236,108 @@ describe("web push", () => {
     expect(
       await pushSubscriptions.countDocuments({ endpoint: device.endpoint }),
     ).toBe(0);
+  });
+
+  test("a customer's phone hears what the shop does to their visit, titled with the shop's name", async () => {
+    const shop = await bookingShop();
+    const customer = await createUser(shop.tenant, "customer");
+    const who = { host: shop.host, token: customer.token };
+    const phone = fakeBrowser("https://web.push.apple.com/customer-1");
+    await api("POST", "/v1/notifications/push-subscriptions", {
+      ...who,
+      body: phone.subscription,
+    });
+    const spy = spyOn(globalThis, "fetch").mockImplementation(pushService(201));
+    restore = () => spy.mockRestore();
+    const sent = () =>
+      pushCalls(spy).map(([, init]) =>
+        phone.decrypt(Buffer.from(init?.body as Uint8Array)),
+      );
+
+    // Their own booking is no news to them.
+    const own = await api("POST", "/v1/public/appointments", {
+      ...who,
+      body: guestBooking(at(shop, 2, "11:00"), { customer: undefined }),
+    });
+    await Bun.sleep(100);
+    expect(spy.mock.calls).toHaveLength(0);
+
+    await api("PATCH", `/v1/appointments/${own.body.id}`, {
+      ...shop.asOwner,
+      body: { startAt: at(shop, 2, "15:00") },
+    });
+    await until(() => spy.mock.calls.length === 1);
+    expect(sent()[0]).toMatchObject({
+      title: `Tu cita fue reprogramada · ${shop.tenant.name}`,
+      url: "/es/account",
+    });
+
+    await api("PATCH", `/v1/appointments/${own.body.id}`, {
+      ...shop.asOwner,
+      body: { status: "cancelled" },
+    });
+    await until(() => spy.mock.calls.length === 2);
+    expect(sent()[1]).toMatchObject({
+      title: `Tu cita fue cancelada · ${shop.tenant.name}`,
+    });
+
+    // A guest has no account and no device: booking and cancelling for them pushes nothing.
+    const guest = await api("POST", "/v1/public/appointments", {
+      host: shop.host,
+      body: guestBooking(at(shop, 3, "11:00")),
+    });
+    await api("PATCH", `/v1/appointments/${guest.body.id}`, {
+      ...shop.asOwner,
+      body: { status: "cancelled" },
+    });
+    await Bun.sleep(100);
+    expect(spy.mock.calls).toHaveLength(2);
+  });
+
+  test("owners get one morning summary per branch and day, only when there is something to say", async () => {
+    const shop = await bookingShop();
+    const phone = fakeBrowser("https://web.push.apple.com/owner-digest");
+    await api("POST", "/v1/notifications/push-subscriptions", {
+      ...shop.asOwner,
+      body: phone.subscription,
+    });
+    const spy = spyOn(globalThis, "fetch").mockImplementation(pushService(201));
+    restore = () => spy.mockRestore();
+    const day = dayIn(shop.timeZone, 2);
+    const run = (time: string) =>
+      sendDigest(shop.tenant, new Date(instantIn(shop.timeZone, day, time)));
+
+    // A quiet day sends nothing (and uses up only that day's slot).
+    await sendDigest(
+      shop.tenant,
+      new Date(instantIn(shop.timeZone, dayIn(shop.timeZone, 3), "09:00")),
+    );
+    expect(spy.mock.calls).toHaveLength(0);
+
+    await api("POST", "/v1/public/appointments", {
+      host: shop.host,
+      body: guestBooking(at(shop, 2, "11:00")),
+    });
+    const afterBooking = spy.mock.calls.length;
+    await run("07:00"); // too early for the branch's clock
+    expect(spy.mock.calls).toHaveLength(afterBooking);
+
+    await run("09:00");
+    expect(spy.mock.calls).toHaveLength(afterBooking + 1);
+    const [, init] = pushCalls(spy).at(-1) ?? ["", undefined];
+    expect(phone.decrypt(Buffer.from(init?.body as Uint8Array))).toMatchObject({
+      title: `Resumen del día · ${shop.tenant.name}`,
+      body: "Centro · 1 cita hoy",
+      url: "/es/admin",
+    });
+
+    await run("09:30"); // already sent today
+    expect(spy.mock.calls).toHaveLength(afterBooking + 1);
+  });
+
+  test("the cron endpoint does not exist without its secret", async () => {
+    expect(
+      (await api("GET", "/cron/digest", { host: "x.localhost" })).status,
+    ).toBe(404);
   });
 });

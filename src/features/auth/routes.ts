@@ -1,15 +1,35 @@
 import { type Context, Hono } from "hono";
 import { createMiddleware } from "hono/factory";
+import { config } from "../../config";
 import type { Role } from "../../db/scoped";
-import { AppError, type Env, parseId, readJson } from "../../shared/http";
+import {
+  AppError,
+  clientIp,
+  type Env,
+  parseId,
+  readJson,
+  tenantOrigin,
+} from "../../shared/http";
 import { requireActiveSubscription } from "../tenancy/subscription";
 import { STAFF } from "./policy";
 import {
+  forgotPassword,
+  type Link,
+  requestVerification,
+  resetPassword,
+  sendVerification,
+  verifyEmail,
+} from "./recovery";
+import {
+  forgotSchema,
+  localeSchema,
   loginSchema,
   passwordSchema,
   registerSchema,
+  resetSchema,
   staffCreate,
   staffUpdate,
+  tokenSchema,
 } from "./schemas";
 import {
   changePassword,
@@ -49,6 +69,20 @@ export function authOf(c: Context<Env>, roles: Role[] = ANYONE) {
   return auth;
 }
 
+const linkOf = (c: Context<Env>, locale?: Link["locale"]): Link => ({
+  origin: tenantOrigin(c),
+  locale: locale ?? c.var.tenant.defaultLocale,
+});
+
+const logMailError = (err: unknown) =>
+  console.error(
+    JSON.stringify({
+      level: "error",
+      event: "verification_mail_failed",
+      message: err instanceof Error ? err.message : String(err),
+    }),
+  );
+
 const session = (r: {
   token: string;
   expiresAt: Date;
@@ -57,8 +91,13 @@ const session = (r: {
 
 export const authRoutes = new Hono<Env>()
   .post("/register", async (c) => {
-    const input = await readJson(c, registerSchema);
-    return c.json(session(await register(c.var.tenant._id, input)), 201);
+    const { locale, ...input } = await readJson(c, registerSchema);
+    const result = await register(c.var.tenant._id, input);
+    // The account works right away; the confirmation email follows without holding the response.
+    sendVerification(c.var.tenant, result.user, linkOf(c, locale)).catch(
+      logMailError,
+    );
+    return c.json(session(result), 201);
   })
   .post("/login", async (c) => {
     const { email, password } = await readJson(c, loginSchema);
@@ -75,6 +114,40 @@ export const authRoutes = new Hono<Env>()
       bearer(c) ?? "",
       currentPassword,
       newPassword,
+    );
+    return c.body(null, 204);
+  })
+  .post("/verify-email/request", requireRole(...ANYONE), async (c) => {
+    const { locale } = await readJson(c, localeSchema);
+    await requestVerification(
+      c.var.tenant,
+      authOf(c).userId,
+      linkOf(c, locale),
+    );
+    return c.body(null, 204);
+  })
+  .post("/verify-email", async (c) => {
+    const { token } = await readJson(c, tokenSchema);
+    await verifyEmail(c.var.tenant._id, token);
+    return c.body(null, 204);
+  })
+  .post("/password/forgot", async (c) => {
+    const { email, locale } = await readJson(c, forgotSchema);
+    await forgotPassword(
+      c.var.tenant,
+      email,
+      clientIp(c, config.PROXY_SECRET),
+      linkOf(c, locale),
+    );
+    return c.body(null, 204);
+  })
+  .post("/password/reset", async (c) => {
+    const { token, password } = await readJson(c, resetSchema);
+    await resetPassword(
+      c.var.tenant._id,
+      token,
+      password,
+      clientIp(c, config.PROXY_SECRET),
     );
     return c.body(null, 204);
   })

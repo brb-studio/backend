@@ -6,7 +6,7 @@ Cuentas por barbería, inicio de sesión, sesiones, roles y gestión del equipo:
 ## Requirements
 
 ### Requirement: Cuentas por barbería
-Cada cuenta SHALL pertenecer a una sola barbería; el correo es único dentro de la barbería y puede repetirse en otra. El registro público MUST crear solo clientes (`customer`). La contraseña MUST tener de 8 a 128 caracteres y guardarse solo como hash argon2id.
+Cada cuenta SHALL pertenecer a una sola barbería; el correo es único dentro de la barbería (índice `tenant_login_unique`, solo sobre cuentas con correo) y puede repetirse en otra, con la misma contraseña o con otra. `users` es la única colección de identidad: las cuentas de una misma persona en varias barberías son independientes y el sistema MUST NOT enlazarlas ni fusionarlas mientras el correo no esté verificado. Los clientes que reservan sin registrarse son registros `guest` (ver `booking`) que no pueden iniciar sesión. El registro público MUST crear solo clientes (`customer`). La contraseña MUST tener de 8 a 128 caracteres y guardarse solo como hash argon2id.
 
 #### Scenario: Registro con correo ya usado
 - **WHEN** alguien se registra con un correo que ya existe en esa barbería
@@ -15,6 +15,10 @@ Cada cuenta SHALL pertenecer a una sola barbería; el correo es único dentro de
 #### Scenario: Mismo correo en otra barbería
 - **WHEN** el correo existe en la barbería A y alguien se registra en la barbería B
 - **THEN** se crea una cuenta nueva e independiente en B
+
+#### Scenario: Contraseñas distintas por barbería
+- **WHEN** la misma persona usa el mismo correo con contraseñas distintas en dos barberías
+- **THEN** cada contraseña solo funciona en su barbería y la sesión de una MUST ser rechazada en la otra (401)
 
 ### Requirement: Inicio de sesión sin filtrar información
 El sistema SHALL responder 401 `INVALID_CREDENTIALS` tanto si el correo no existe, como si la contraseña es incorrecta o la cuenta está inactiva, verificando siempre un hash para que el tiempo de respuesta no delate cuál fue. El sistema MUST limitar los intentos a 10 por cuenta (barbería y correo) cada 15 minutos; los siguientes responden 429 `RATE_LIMITED`.
@@ -40,6 +44,24 @@ Un usuario con sesión SHALL poder cambiar su contraseña enviando la actual. Si
 #### Scenario: Cambio exitoso
 - **WHEN** el usuario cambia su contraseña desde su teléfono
 - **THEN** sigue con sesión en ese teléfono y su sesión de la computadora deja de valer
+
+### Requirement: Verificación de correo
+Registrarse SHALL enviar al correo un enlace de un solo uso que vence en 24 horas; la cuenta funciona de inmediato sin verificar. `POST /v1/auth/verify-email` con el token marca `emailVerifiedAt` y `GET /v1/auth/me` devuelve `emailVerified`. Un usuario con sesión puede pedir otro enlace (`POST /v1/auth/verify-email/request`, 3 por hora), y el nuevo MUST retirar el anterior. Solo se guarda el SHA-256 del token en `authTokens`, con TTL. Un enlace usado, vencido, inventado, de otra barbería o de otro propósito responde 400 `INVALID_TOKEN`. El sistema MUST NOT unir cuentas de distintas barberías por correo, ni siquiera verificado, sin una decisión de producto explícita.
+
+#### Scenario: Enlace reutilizado
+- **WHEN** alguien usa por segunda vez el mismo enlace de verificación
+- **THEN** la respuesta es 400 `INVALID_TOKEN`
+
+### Requirement: Recuperación de contraseña
+`POST /v1/auth/password/forgot` con un correo SHALL responder siempre 204, exista o no la cuenta, y solo enviar el correo (enlace de un solo uso, vigencia de 1 hora) si hay una cuenta activa con contraseña. Los envíos se limitan a 3 por hora por correo y 10 cada 15 minutos por visitante, con 429 `RATE_LIMITED`. `POST /v1/auth/password/reset` con el token y una contraseña de 8 a 128 caracteres SHALL cambiarla, marcar el correo como verificado y borrar todas las sesiones de la cuenta. El proveedor de correo es Resend (`RESEND_API_KEY` y `MAIL_FROM`, ambos o ninguno); si falla o no está configurado, el registro y la solicitud no fallan.
+
+#### Scenario: Correo inexistente
+- **WHEN** alguien pide recuperar la contraseña de un correo sin cuenta
+- **THEN** la respuesta es 204 y no se envía ningún correo
+
+#### Scenario: Restablecer con sesiones abiertas
+- **WHEN** el usuario restablece su contraseña con el enlace
+- **THEN** la contraseña vieja deja de servir y sus sesiones abiertas dejan de valer
 
 ### Requirement: Roles y alcance
 El sistema SHALL manejar los roles `owner`, `admin`, `manager`, `barber` y `customer`. Owner y admin tienen alcance sobre toda la barbería; manager y barber solo sobre su sucursal (`branchId`); el barbero, además, solo sobre su propio perfil cuando la regla lo indica. Las rutas del staff MUST rechazar con 403 `FORBIDDEN` a los roles no permitidos y con 401 `UNAUTHENTICATED` a quien no tiene sesión.

@@ -160,18 +160,45 @@ export type BranchDoc = {
   updatedAt: Date;
 };
 
+/**
+ * An account of one barbershop (a person with N barbershops has N independent `users`, one per
+ * tenant; nothing links them because emails are not verified). Staff and customers share the
+ * collection; a customer who booked without signing up is a `guest` record: no login, only the
+ * contact data the shop needs. Appointments point at it through `customerId`.
+ */
 export type UserDoc = {
   _id: ObjectId;
   tenantId: ObjectId;
-  email: string;
-  passwordHash: string;
+  /** The login; guests have none. */
+  email?: string;
+  passwordHash?: string;
   name: string;
   phone?: string;
+  /** Guests only: the email they left when booking. Never a login, so it can't squat a real signup. */
+  contactEmail?: string;
+  guest?: true;
+  /** When the owner of the email proved control of it (a verification link or a password reset). */
+  emailVerifiedAt?: Date;
+  /** The Stripe Customer used for bank transfers (on the platform account); Stripe gives it its own CLABE. */
+  stripeCustomerId?: string;
+  /** Set by the customers → users migration: the `customers` document this record replaces. */
+  legacyCustomerId?: ObjectId;
   role: Role;
   branchId?: ObjectId;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
+};
+
+/** A single-use emailed link; `_id` is the SHA-256 of the token, which is never stored. */
+export type AuthTokenDoc = {
+  _id: string;
+  tenantId: ObjectId;
+  userId: ObjectId;
+  kind: "verify_email" | "reset_password";
+  expiresAt: Date;
+  usedAt?: Date;
+  createdAt: Date;
 };
 
 export type SessionDoc = {
@@ -267,24 +294,12 @@ export const referrals = db.collection<ReferralDoc>("referrals");
 export const branches = db.collection<BranchDoc>("branches");
 export const users = db.collection<UserDoc>("users");
 export const sessions = db.collection<SessionDoc>("sessions");
+export const authTokens = db.collection<AuthTokenDoc>("authTokens");
 export const rateLimits = db.collection<RateLimitDoc>("rateLimits");
 export const barbers = db.collection<BarberDoc>("barbers");
 export const timeOff = db.collection<TimeOffDoc>("timeOff");
 export const services = db.collection<ServiceDoc>("services");
 export const packages = db.collection<PackageDoc>("packages");
-
-export type CustomerDoc = {
-  _id: ObjectId;
-  tenantId: ObjectId;
-  userId?: ObjectId;
-  name: string;
-  phone?: string;
-  email?: string;
-  /** The Stripe Customer used for bank transfers (on the platform account); Stripe gives it its own CLABE. */
-  stripeCustomerId?: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
 
 /** `pending_payment`: booked online and waiting for the payment; it holds the slot until `paymentDeadline`. */
 export const APPOINTMENT_STATUSES = [
@@ -413,16 +428,25 @@ export type PromotionDoc = {
   updatedAt: Date;
 };
 
-export const customers = db.collection<CustomerDoc>("customers");
 export const appointments = db.collection<AppointmentDoc>("appointments");
 export const promotions = db.collection<PromotionDoc>("promotions");
 
-/** `payment.disputed` goes to owners and admins: a customer opened a chargeback on an online payment. */
+/**
+ * `payment.disputed` and `payment.transfer_requested` go to owners and admins: a customer opened a chargeback on an online
+ * payment, or asked for the bank details of a manual SPEI transfer they will have to confirm.
+ * `customer.*` go to the customer's own account when someone else changes their appointment or payment.
+ */
 export const NOTIFICATION_TYPES = [
   "appointment.booked",
   "appointment.cancelled",
   "appointment.rescheduled",
   "payment.disputed",
+  "payment.transfer_requested",
+  "customer.booked",
+  "customer.cancelled",
+  "customer.rescheduled",
+  "customer.paid",
+  "customer.payment_rejected",
 ] as const;
 
 export type NotificationDoc = {
@@ -435,6 +459,7 @@ export type NotificationDoc = {
     start: string;
     timeZone: string;
     customerName: string;
+    barberName?: string;
     items: Localized[];
     branchName: string;
   };
@@ -704,38 +729,77 @@ export const specs: CollectionSpec[] = [
   {
     name: "users",
     validator: {
-      $jsonSchema: object(
-        [
-          "tenantId",
-          "email",
-          "passwordHash",
-          "name",
-          "role",
-          "active",
-          "createdAt",
-          "updatedAt",
+      $jsonSchema: {
+        ...object(
+          ["tenantId", "name", "role", "active", "createdAt", "updatedAt"],
+          {
+            tenantId: objectId,
+            email: string({ pattern: "^[^A-Z\\s]+@[^A-Z\\s]+$" }),
+            passwordHash: string({ pattern: "^\\$argon2id\\$" }),
+            name: string(),
+            phone: string(),
+            contactEmail: string(),
+            guest: { bsonType: "bool", enum: [true] },
+            emailVerifiedAt: date,
+            stripeCustomerId: string({ pattern: "^cus_" }),
+            legacyCustomerId: objectId,
+            role: oneOf(ROLES),
+            branchId: objectId,
+            active: bool,
+            ...timestamps,
+          },
+        ),
+        // An account can sign in; a guest is a customer contact record and can't.
+        anyOf: [
+          { required: ["email", "passwordHash"] },
+          { required: ["guest"], properties: { role: oneOf(["customer"]) } },
         ],
+      },
+    },
+    dropIndexes: ["tenant_email_unique"],
+    indexes: [
+      {
+        key: { tenantId: 1, email: 1 },
+        name: "tenant_login_unique",
+        unique: true,
+        partialFilterExpression: { email: { $type: "string" } },
+      },
+      // One guest record per phone and barbershop: repeat bookings reuse it.
+      {
+        key: { tenantId: 1, phone: 1 },
+        name: "tenant_guest_phone_unique",
+        unique: true,
+        partialFilterExpression: { guest: true, phone: { $type: "string" } },
+      },
+      {
+        key: { tenantId: 1, legacyCustomerId: 1 },
+        name: "tenant_legacy_customer_unique",
+        unique: true,
+        partialFilterExpression: { legacyCustomerId: { $type: "objectId" } },
+      },
+      // The staff list (role ≠ customer) must not scan every customer account of the barbershop.
+      { key: { tenantId: 1, role: 1 }, name: "tenant_role" },
+    ],
+  },
+  {
+    name: "authTokens",
+    validator: {
+      $jsonSchema: object(
+        ["tenantId", "userId", "kind", "expiresAt", "createdAt"],
         {
+          _id: string({ pattern: "^[0-9a-f]{64}$" }),
           tenantId: objectId,
-          email: string({ pattern: "^[^A-Z\\s]+@[^A-Z\\s]+$" }),
-          passwordHash: string({ pattern: "^\\$argon2id\\$" }),
-          name: string(),
-          phone: string(),
-          role: oneOf(ROLES),
-          branchId: objectId,
-          active: bool,
-          ...timestamps,
+          userId: objectId,
+          kind: oneOf(["verify_email", "reset_password"]),
+          expiresAt: date,
+          usedAt: date,
+          createdAt: date,
         },
       ),
     },
     indexes: [
-      {
-        key: { tenantId: 1, email: 1 },
-        name: "tenant_email_unique",
-        unique: true,
-      },
-      // The staff list (role ≠ customer) must not scan every customer account of the barbershop.
-      { key: { tenantId: 1, role: 1 }, name: "tenant_role" },
+      { key: { expiresAt: 1 }, name: "expiresAt_ttl", expireAfterSeconds: 0 },
+      { key: { tenantId: 1, userId: 1, kind: 1 }, name: "tenant_user_kind" },
     ],
   },
   {
@@ -930,34 +994,6 @@ export const specs: CollectionSpec[] = [
         key: { tenantId: 1, slug: 1 },
         name: "tenant_slug_unique",
         unique: true,
-      },
-    ],
-  },
-  {
-    name: "customers",
-    validator: {
-      $jsonSchema: object(["tenantId", "name", "createdAt", "updatedAt"], {
-        tenantId: objectId,
-        userId: objectId,
-        name: string(),
-        phone: string({ pattern: "^\\+?\\d{7,15}$" }),
-        email: string(),
-        stripeCustomerId: string({ pattern: "^cus_" }),
-        ...timestamps,
-      }),
-    },
-    indexes: [
-      {
-        key: { tenantId: 1, phone: 1 },
-        name: "tenant_phone_unique",
-        unique: true,
-        partialFilterExpression: { phone: { $type: "string" } },
-      },
-      {
-        key: { tenantId: 1, userId: 1 },
-        name: "tenant_user_unique",
-        unique: true,
-        partialFilterExpression: { userId: { $type: "objectId" } },
       },
     ],
   },

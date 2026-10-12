@@ -45,7 +45,7 @@ describe("vapidAuthorization", () => {
   test("an ES256 JWT for the endpoint's origin, verifiable with the public key", () => {
     const keys = {
       ...generateVapidKeys(),
-      subject: "mailto:ops@magicstudio.test",
+      subject: "mailto:ops@brb-studio.test",
     };
     const now = Date.parse("2026-10-03T12:00:00Z");
     const header = vapidAuthorization(
@@ -62,7 +62,7 @@ describe("vapidAuthorization", () => {
     expect(JSON.parse(Buffer.from(claims, "base64url").toString())).toEqual({
       aud: "https://fcm.googleapis.com",
       exp: now / 1000 + 12 * 60 * 60,
-      sub: "mailto:ops@magicstudio.test",
+      sub: "mailto:ops@brb-studio.test",
     });
     const point = Buffer.from(keys.publicKey, "base64url");
     const publicKey = createPublicKey({

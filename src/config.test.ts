@@ -68,6 +68,22 @@ describe("parseConfig", () => {
     ).toBe("sk_live_abc");
   });
 
+  test("MAIL_FROM: a plain address or Name <address>, set together with the key", () => {
+    const key = { RESEND_API_KEY: "re_1234567890" };
+    for (const from of [
+      "onboarding@resend.dev",
+      "brb-studio <no-reply@a.com>",
+    ]) {
+      expect(parseConfig({ ...local, ...key, MAIL_FROM: from }).MAIL_FROM).toBe(
+        from,
+      );
+    }
+    expect(
+      errorOf({ ...local, ...key, MAIL_FROM: "onboarding@resend.dev." }),
+    ).toContain("MAIL_FROM");
+    expect(errorOf({ ...local, ...key })).toContain("MAIL_FROM");
+  });
+
   test("accepts every localhost form", () => {
     for (const hosts of [
       "localhost",

@@ -55,7 +55,7 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 | `barbers/` | perfiles barbero, horario semanal, servicios que hace, `time-off.ts` | — (validación en schemas/service) |
 | `catalog/` | servicios, paquetes, catálogo público | `rules.ts` (`offers`: quién puede hacer qué) |
 | `availability/` | slots libres | `engine.ts` (pura, convierte zona 1 vez por ventana) |
-| `booking/` | citas, clientes, snapshots (`order.ts`), cancel/reschedule | `order.ts` |
+| `booking/` | citas, clientes invitados (`customers.ts`: registros `guest` en `users`), snapshots (`order.ts`), cancel/reschedule | `order.ts` |
 | `promotions/` | promos + pricing + redenciones | `rules.ts` (`priceFor`: lo cotizado = lo cobrado) |
 | `notifications/` | notificaciones in-app, SSE, push subscriptions | — |
 | `platform/` | dashboard staff global: auth, reportes, comisión, payouts | `commission.ts` (`resolveCommission`, único lugar de la regla) |
@@ -69,7 +69,7 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 - `scoped.ts:66` — `forTenant(tenantId)` inyecta `tenantId` en **cada** query (`find`, `findOne`, `insertOne`, `updateOne/Many`, `findOneAndUpdate`, `deleteOne`, `countDocuments`).
 - `scoped.ts:83` — `platform.*` expone colecciones crudas para lecturas cross-tenant. **Solo `features/platform/` lo usa.**
 - `scoped.ts:99-115` — `runAll()` (paralelo sin sesión, secuencial con sesión) y `transaction()` (`snapshot` + `majority`).
-- `collections.ts` — validadores (`bsonType: "int"` para dinero) e índices. Índices clave de `appointments`: `barber_start_live_unique` (anti-doble-reserva), `tenant_branch_start`, `barber_start`, `tenant_customer_start`, `payment_intent`, `start`.
+- `collections.ts` — validadores (`bsonType: "int"` para dinero) e índices. `users`: `tenant_login_unique` (correo por barbería, solo cuentas), `tenant_guest_phone_unique` (un invitado por teléfono), `tenant_legacy_customer_unique` (migración). Índices clave de `appointments`: `barber_start_live_unique` (anti-doble-reserva), `tenant_branch_start`, `barber_start`, `tenant_customer_start`, `payment_intent`, `start`.
 
 ## Reglas de navegación para IA
 

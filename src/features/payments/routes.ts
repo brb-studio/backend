@@ -10,10 +10,10 @@ import {
   parse,
   parseId,
   readJson,
+  tenantOrigin,
 } from "../../shared/http";
 import { authOf, requireRole } from "../auth/routes";
 import { getUser } from "../auth/service";
-import { findCustomer } from "../booking/customers";
 import { requireActiveSubscription } from "../tenancy/subscription";
 import { checkoutStatus, refundAppointment, switchPayment } from "./checkout";
 import {
@@ -73,13 +73,8 @@ async function assertPayer(
     throw new AppError(403, "FORBIDDEN", "Not allowed");
   }
   const t = forTenant(c.var.tenant._id);
-  const [customer, appointment] = await Promise.all([
-    findCustomer(t, { userId: auth.userId }),
-    t.appointments.findOne({ _id: appointmentId }),
-  ]);
-  if (!appointment || !customer?._id.equals(appointment.customerId)) {
-    throw notFound();
-  }
+  const appointment = await t.appointments.findOne({ _id: appointmentId });
+  if (!appointment?.customerId.equals(auth.userId)) throw notFound();
 }
 
 export const paymentPublicRoutes = new Hono<Env>()
@@ -104,18 +99,6 @@ export const paymentPublicRoutes = new Hono<Env>()
     return c.json(await switchPayment(c.var.tenant, id, choice), 201);
   });
 
-/** Where Stripe sends the owner back: the barbershop's own site (the host this request came for). */
-function tenantOrigin(c: Context<Env>) {
-  const host =
-    c.req.header("X-Tenant-Host") ??
-    c.req.header("X-Forwarded-Host") ??
-    c.req.header("Host") ??
-    "";
-  const local = /(^|\.)localhost(:\d+)?$/.test(host);
-  return `${local ? "http" : "https"}://${host}`;
-}
-
-/** The barbershop's money: only owner and admin see bank details, connect Stripe and refund. */
 export const paymentStaffRoutes = new Hono<Env>()
   .use(requireRole("owner", "admin"))
   .get("/settings", (c) => c.json(bankSettingsOf(c.var.tenant)))
@@ -129,6 +112,7 @@ export const paymentStaffRoutes = new Hono<Env>()
     const { locale } = await readJson(c, onboardingBody);
     const tenant = c.var.tenant;
     const user = await getUser(authOf(c));
+    if (!user.email) throw new AppError(403, "FORBIDDEN", "Not allowed");
     const urls = onboardingUrls(
       tenantOrigin(c),
       locale ?? tenant.defaultLocale,

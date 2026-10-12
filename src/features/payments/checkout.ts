@@ -1,12 +1,12 @@
 import type { ObjectId } from "mongodb";
 import {
   type AppointmentDoc,
-  type CustomerDoc,
   forTenant,
   type PaymentDoc,
   type PaymentKind,
   type TenantDb,
   type TenantDoc,
+  type UserDoc,
 } from "../../db/scoped";
 import { AppError } from "../../shared/http";
 import { depositOf, onlinePaymentsReady } from "./connect";
@@ -37,8 +37,7 @@ import {
 
 const notFound = () => new AppError(404, "NOT_FOUND", "Not found");
 
-/** The Stripe Customer behind a customer's bank transfers; created once, on the platform account. */
-async function stripeCustomerFor(t: TenantDb, customer: CustomerDoc) {
+async function stripeCustomerFor(t: TenantDb, customer: UserDoc) {
   if (customer.stripeCustomerId) return customer.stripeCustomerId;
   const created = await stripe.post(
     customerSchema,
@@ -46,7 +45,9 @@ async function stripeCustomerFor(t: TenantDb, customer: CustomerDoc) {
     {
       name: customer.name,
       ...(customer.phone && { phone: customer.phone }),
-      ...(customer.email && { email: customer.email }),
+      ...((customer.email ?? customer.contactEmail) && {
+        email: customer.email ?? customer.contactEmail,
+      }),
       metadata: {
         tenantId: customer.tenantId.toHexString(),
         customerId: customer._id.toHexString(),
@@ -54,15 +55,14 @@ async function stripeCustomerFor(t: TenantDb, customer: CustomerDoc) {
     },
     `customer-${customer._id.toHexString()}`,
   );
-  await t.customers.updateOne(
+  await t.users.updateOne(
     { _id: customer._id, stripeCustomerId: { $exists: false } },
     { $set: { stripeCustomerId: created.id, updatedAt: new Date() } },
   );
-  const saved = await t.customers.findOne({ _id: customer._id });
+  const saved = await t.users.findOne({ _id: customer._id });
   return saved?.stripeCustomerId ?? created.id;
 }
 
-/** The PaymentIntent for a payment: a destination charge to the shop, keeping the fee that covers Stripe's. */
 function intentParams(
   tenant: TenantDoc,
   payment: PaymentDoc,
@@ -74,7 +74,6 @@ function intentParams(
   return {
     amount: payment.amountMinor,
     currency: payment.currency.toLowerCase(),
-    // Cards include Apple Pay and Google Pay; Link is Stripe's own wallet.
     allowed_payment_method_types: transfer
       ? ["customer_balance"]
       : ["card", "link"],
@@ -123,7 +122,6 @@ export function checkoutView(
     amountMinor: payment.amountMinor,
     totalMinor: appointment.totalMinor,
     balanceMinor: Math.max(0, appointment.totalMinor - payment.amountMinor),
-    /** What the customer gets back cancelling in time: Stripe's fee is not refundable. */
     refundableMinor: customerRefundable(
       payment.amountMinor - (payment.stripe?.refundedMinor ?? 0),
       stripeFeeOf(payment),
@@ -145,15 +143,11 @@ export function checkoutView(
   };
 }
 
-/**
- * After the booking committed: asks Stripe for the charge. If Stripe can't be reached the hold is
- * released at once, so a failed attempt never keeps a slot taken.
- */
 export async function startCharge(
   tenant: TenantDoc,
   appointment: AppointmentDoc,
   payment: PaymentDoc,
-  customer: CustomerDoc,
+  customer: UserDoc,
 ) {
   const t = forTenant(tenant._id);
   let pi: StripePaymentIntent;
@@ -181,7 +175,6 @@ export async function startCharge(
   });
   const attached = await t.payments.findOne({ _id: payment._id });
   if (!attached) throw notFound();
-  // A customer with money already in their Stripe balance pays at once.
   if (pi.status === "succeeded") await settleIntent(tenant, attached, pi);
   const [fresh, latest] = await Promise.all([
     t.appointments.findOne({ _id: appointment._id }),
@@ -194,7 +187,6 @@ export async function startCharge(
   );
 }
 
-/** What the payment screen polls: the state, and while unpaid how to pay (card secret or CLABE). */
 export async function checkoutStatus(
   tenant: TenantDoc,
   appointmentId: ObjectId,
@@ -224,7 +216,6 @@ export async function checkoutStatus(
   }
 }
 
-/** Switches how (card ↔ transfer) or how much (deposit ↔ full) an unpaid booking is paid, same deadline. */
 export async function switchPayment(
   tenant: TenantDoc,
   appointmentId: ObjectId,
@@ -287,12 +278,11 @@ export async function switchPayment(
       feeDebtMinor,
     ),
   );
-  const customer = await t.customers.findOne({ _id: appointment.customerId });
+  const customer = await t.users.findOne({ _id: appointment.customerId });
   if (!customer) throw notFound();
   return startCharge(tenant, appointment, next, customer);
 }
 
-/** Owner/admin refund from the appointment's detail: the whole remaining amount unless they say less. */
 export async function refundAppointment(
   tenant: TenantDoc,
   appointmentId: ObjectId,
@@ -304,7 +294,6 @@ export async function refundAppointment(
   if (!appointment) throw notFound();
   const payment = await currentPayment(t, appointment);
   const left = payment.amountMinor - (payment.stripe?.refundedMinor ?? 0);
-  // The barbershop chose to refund: it pays the fee the platform can't get back.
   await refundPayment(tenant, payment, amountMinor ?? left, "refund", {
     shopPays: true,
     by,

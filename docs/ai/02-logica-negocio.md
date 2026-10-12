@@ -13,7 +13,7 @@
 | Capability | Lee este spec si vas a tocar… |
 |---|---|
 | `tenancy` | resolución por host, branding, branches, límites de plan, `SUBSCRIPTION_INACTIVE` (402) |
-| `accounts-access` | registro/login/logout, sesiones 30d con renovación, roles owner/admin/manager/barber/customer, staff |
+| `accounts-access` | registro/login/logout, sesiones 30d con renovación, roles owner/admin/manager/barber/customer, staff; `users` es la única identidad (cuentas por barbería + invitados `guest`, sin colección `customers`) |
 | `barbers-schedule` | barberos, horario semanal, breaks, `serviceIds`, link `userId`, time-off y cierres de sucursal |
 | `catalog` | servicios y paquetes; duración/precio-lista siempre computados de servicios vigentes; `offers` (quién puede hacer qué) |
 | `availability` | motor de slots libres, ventana de reserva, aviso mínimo, timezones por sucursal |
@@ -38,7 +38,7 @@
 8. **Payouts atómicos:** un payout liquida citas completas; índice único en `payouts.appointmentIds` hace imposible pagar una dos veces, aun concurrente.
 9. **Referidos idempotentes:** un referido una sola vez (índice único); el crédito lleva idempotency key para que un webhook reintentado no pague doble.
 10. **Suscripciones:** el owner pide un pago (`pending`, 5 días) y plataforma lo confirma a mano; confirmar fija plan `pro`, suma un mes y mueve crédito/recompensas en una transacción. Rutas de billing saltan `requireActiveSubscription` (una tienda vencida debe poder pagar).
-11. **Notificaciones garantizadas:** la notificación del barbero se escribe **dentro** de la transacción de reserva. Push se envía post-commit; 404/410 del push-service borra la suscripción; solo hosts push conocidos (anti-SSRF).
+11. **Notificaciones garantizadas:** la notificación del barbero (y la del cliente con cuenta cuando el staff o el proveedor de pago cambian su cita; nunca a invitados ni por sus propias acciones) se escribe **dentro** de la transacción de reserva. Push se envía post-commit; 404/410 del push-service borra la suscripción; solo hosts push conocidos (anti-SSRF).
 12. **Pagos en línea:** el monto sale de la cita (`priceFor()` + `payments/rules.ts`), nunca del cliente. Una cita `pending_payment` aparta el horario hasta `paymentDeadline`; solo el webhook de Stripe (firma verificada, evento idempotente, PaymentIntent releído y comparado con lo guardado) la confirma. Lo que llega tarde se reembolsa completo.
 
 ## Workflow de cambio de negocio (obligatorio)

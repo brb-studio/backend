@@ -7,16 +7,12 @@ import {
 } from "../../db/scoped";
 import {
   notifyBarber,
+  notifyCustomer,
   notifyOwners,
   pushAfterCommit,
 } from "../notifications/service";
 import { OPEN } from "./holds";
 
-/**
- * Stripe says the money arrived. The payment becomes `paid` and its booking `confirmed`, with the
- * barber's notice, in one transaction. If the hold had already ended, the booking stays cancelled and
- * the caller refunds (`late`).
- */
 export async function settlePaid(
   tenant: TenantDoc,
   payment: PaymentDoc,
@@ -75,7 +71,7 @@ export async function settlePaid(
       { _id: confirmed.branchId },
       { session },
     );
-    const customer = await t.customers.findOne(
+    const customer = await t.users.findOne(
       { _id: confirmed.customerId },
       { session },
     );
@@ -93,13 +89,18 @@ export async function settlePaid(
             session,
           )
         : undefined;
-    return { late: false, notes: [note] };
+    const toCustomer = await notifyCustomer(
+      t,
+      "customer.booked",
+      confirmed,
+      session,
+    );
+    return { late: false, notes: [note, toCustomer] };
   });
   if (outcome) pushAfterCommit(tenant, outcome.notes);
   return outcome;
 }
 
-/** Keeps the refunded total as Stripe reports it; a repeated report changes nothing. */
 export async function recordRefund(
   tenant: TenantDoc,
   payment: PaymentDoc,
@@ -145,7 +146,6 @@ export async function recordRefund(
   });
 }
 
-/** A chargeback: the payment is `disputed` and owners and admins are told, in one transaction. */
 export async function recordDispute(
   tenant: TenantDoc,
   payment: PaymentDoc,
@@ -173,7 +173,7 @@ export async function recordDispute(
       { _id: appointment.branchId },
       { session },
     );
-    const customer = await t.customers.findOne(
+    const customer = await t.users.findOne(
       { _id: appointment.customerId },
       { session },
     );
@@ -191,7 +191,6 @@ export async function recordDispute(
   pushAfterCommit(tenant, notes);
 }
 
-/** A card attempt that failed: still payable with another card until the deadline. */
 export async function noteFailure(
   tenant: TenantDoc,
   payment: PaymentDoc,

@@ -77,11 +77,19 @@ Si la barbería tiene pagos en línea, la cotización SHALL incluir `online`: si
 - **THEN** el total es 17.00, el anticipo 10.00 (el mínimo de Stripe) y cada opción trae su reembolsable
 
 ### Requirement: Identidad del cliente
-El sistema SHALL identificar a los invitados por su teléfono normalizado (sin espacios, guiones ni paréntesis). La primera reserva crea el cliente y las siguientes lo reutilizan sin sobrescribir su nombre. Si una cuenta de cliente tiene el mismo teléfono que un cliente invitado sin cuenta, el sistema MUST vincularlos en lugar de duplicarlos. Un cliente con sesión ve sus últimas 50 citas, de la más nueva a la más vieja.
+El cliente de una cita SHALL ser siempre un documento de `users` de la misma barbería (`appointments.customerId`); no existe una colección `customers`. Un cliente con sesión reserva con su propia cuenta. Un invitado SHALL ser un registro `guest: true` (rol `customer`, sin `email` ni contraseña, que no puede iniciar sesión), identificado por su teléfono normalizado (sin espacios, guiones ni paréntesis) y único por barbería y teléfono: la primera reserva lo crea y las siguientes lo reutilizan sin sobrescribir su nombre. El correo que deja un invitado se guarda como `contactEmail` y nunca como credencial. El sistema MUST NOT vincular ni fusionar un invitado con una cuenta por teléfono o correo, porque no están verificados. Un cliente con sesión ve sus últimas 50 citas, de la más nueva a la más vieja.
+
+#### Scenario: Invitado con el teléfono de una cuenta
+- **WHEN** alguien reserva como invitado con el teléfono o el correo de una cuenta existente
+- **THEN** se crea o reutiliza un registro invitado distinto y la cuenta no ve esa cita en su historial
 
 #### Scenario: Invitado que después crea cuenta
-- **WHEN** alguien reservó como invitado y después se registra con el mismo teléfono y reserva
-- **THEN** su historial incluye las citas que hizo como invitado
+- **WHEN** alguien reservó como invitado y después se registra con el mismo teléfono
+- **THEN** su cuenta nueva empieza sin las citas que hizo como invitado
+
+#### Scenario: Segundo invitado con el mismo teléfono
+- **WHEN** se intenta guardar otro invitado con el mismo teléfono en la misma barbería
+- **THEN** la base lo rechaza por el índice único `tenant_guest_phone_unique` y la reserva reutiliza el existente
 
 ### Requirement: Cancelación por el cliente
 Un cliente con sesión SHALL poder cancelar solo sus propias citas confirmadas, y solo hasta `cancelNoticeMin` minutos antes del inicio; después la respuesta MUST ser 409 `TOO_LATE`. Al cancelar:
@@ -113,6 +121,17 @@ El staff SHALL listar citas por rango, de máximo 62 días; por defecto, desde 1
 #### Scenario: Barbero consulta la agenda
 - **WHEN** un barbero lista las citas de la semana
 - **THEN** solo recibe las suyas
+
+### Requirement: Mi día
+`GET /v1/appointments/my-day` SHALL devolver al usuario con sesión de staff sus propias citas confirmadas y completadas de hoy, según la zona horaria de la sucursal de su perfil de barbero, ordenadas por hora. El perfil es el que está vinculado a su cuenta, sea cual sea su rol (barbero, o dueño o admin que también corta). Sin perfil vinculado MUST responder `{ "barber": null }`.
+
+#### Scenario: Dueño que también corta
+- **WHEN** un dueño vinculado a un perfil de barbero pide su día
+- **THEN** recibe solo las citas de ese perfil, no las de toda la barbería
+
+#### Scenario: Cuenta sin perfil
+- **WHEN** una cuenta de staff sin perfil vinculado pide su día
+- **THEN** recibe `{ "barber": null }`
 
 ### Requirement: Cambios de estado por el staff
 El staff SHALL poder marcar una cita confirmada como `completed` o `no_show`, solo después de su inicio (antes, 409 `NOT_STARTED`), o como `cancelled`, con motivo opcional; cancelar una cita pagada en línea devuelve el pago completo. Un `PATCH` MUST cambiar el estado o reprogramar, no ambos; ambos pueden traer notas. Las citas que no están confirmadas responden 409 `NOT_CONFIRMED`.

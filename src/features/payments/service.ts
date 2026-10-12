@@ -1,16 +1,22 @@
 import { ObjectId, type WithId } from "mongodb";
 import {
   type AppointmentDoc,
-  type CustomerDoc,
   forTenant,
+  type NotificationDoc,
   type PaymentDoc,
   type PaymentStatus,
   platform,
   type TenantDoc,
   transaction,
+  type UserDoc,
 } from "../../db/scoped";
 import { collect, mapBy } from "../../shared/cursor";
 import { AppError, isDuplicate } from "../../shared/http";
+import {
+  notifyCustomer,
+  notifyOwners,
+  pushAfterCommit,
+} from "../notifications/service";
 
 const EXPIRES_AFTER_MS = 48 * 60 * 60 * 1000;
 
@@ -146,6 +152,7 @@ export async function createTransfer(
     expiresAt: new Date(now.getTime() + EXPIRES_AFTER_MS),
     history: [{ status: "pending", at: now }],
   };
+  let notes: NotificationDoc[] = [];
   try {
     await transaction(async (session) => {
       const { tenantId: _, ...doc } = payment;
@@ -165,16 +172,37 @@ export async function createTransfer(
         },
         { session },
       );
+      const [customer, branch] = await Promise.all([
+        t.users.findOne(
+          { _id: appointment.customerId },
+          { session, projection: { name: 1 } },
+        ),
+        t.branches.findOne(
+          { _id: appointment.branchId },
+          { session, projection: { name: 1 } },
+        ),
+      ]);
+      notes = await notifyOwners(
+        t,
+        {
+          type: "payment.transfer_requested",
+          appointment,
+          branch: { name: branch?.name ?? "" },
+          customerName: customer?.name ?? "",
+        },
+        session,
+      );
     });
   } catch (err) {
     const winner = isDuplicate(err) && (await open());
     if (winner) return view(winner);
     throw err;
   }
+  pushAfterCommit(tenant, notes);
   return view(payment);
 }
 
-type Customer = Pick<CustomerDoc, "name" | "phone">;
+type Customer = Pick<UserDoc, "name" | "phone">;
 
 export async function listPayments(tenant: TenantDoc, status: PaymentStatus) {
   const t = forTenant(tenant._id);
@@ -195,7 +223,7 @@ export async function listPayments(tenant: TenantDoc, status: PaymentStatus) {
     (a) => a._id.toHexString(),
   );
   const customers = await mapBy(
-    t.customers
+    t.users
       .find({
         _id: {
           $in: [...appointments.values()].map((a) => a.customerId),
@@ -246,7 +274,7 @@ async function resolve(
   check(payment, appointment);
 
   const now = new Date();
-  await transaction(async (session) => {
+  const note = await transaction(async (session) => {
     const { matchedCount } = await t.payments.updateOne(
       { _id: payment._id, status: "pending" },
       {
@@ -274,7 +302,15 @@ async function resolve(
       },
       { session },
     );
+    return notifyCustomer(
+      t,
+      status === "paid" ? "customer.paid" : "customer.payment_rejected",
+      appointment,
+      session,
+      staffId,
+    );
   });
+  pushAfterCommit(tenant, [note]);
   const resolved = await t.payments.findOne({ _id: payment._id });
   if (!resolved) throw new AppError(404, "NOT_FOUND", "Not found");
   return view(resolved);

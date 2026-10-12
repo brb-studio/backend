@@ -1,11 +1,16 @@
 import * as z from "zod";
+import { LOCALES } from "../../db/scoped";
 import { objectId } from "../../shared/http";
 
 export const email = z.string().trim().toLowerCase().max(254).pipe(z.email());
 export const password = z.string().min(8).max(128);
 const name = z.string().trim().min(2).max(80);
 
+const locale = z.enum(LOCALES).optional();
+const token = z.string().regex(/^[\w-]{43}$/);
+
 export const registerSchema = z.strictObject({
+  locale,
   name,
   email,
   phone: z
@@ -21,6 +26,11 @@ export const loginSchema = z.strictObject({
   email,
   password: z.string().min(1).max(128),
 });
+
+export const localeSchema = z.strictObject({ locale });
+export const tokenSchema = z.strictObject({ token });
+export const forgotSchema = z.strictObject({ email, locale });
+export const resetSchema = z.strictObject({ token, password });
 
 export const passwordSchema = z.strictObject({
   currentPassword: z.string().min(1).max(128),

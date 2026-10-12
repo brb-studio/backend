@@ -27,7 +27,7 @@ Los `serviceIds` de un barbero SHALL ser servicios válidos para todas las sucur
 - **THEN** la respuesta es 422 `VALIDATION`
 
 ### Requirement: Cuenta vinculada
-Un perfil SHALL poder vincularse con una cuenta de rol `barber` de la misma sucursal; con cualquier otra cuenta la respuesta MUST ser 422 `VALIDATION`. Una cuenta tiene como máximo un perfil (409 `USER_LINKED` si ya tiene uno), y enviar `userId: null` desvincula. La cuenta vinculada recibe los avisos de sus citas.
+Un perfil SHALL poder vincularse con una cuenta de rol `barber` de la misma sucursal, o con una cuenta `owner` o `admin` de cualquier sucursal (dueño que también corta pelo, que conserva todos sus permisos de dueño); con cualquier otra cuenta la respuesta MUST ser 422 `VALIDATION`. Una cuenta tiene como máximo un perfil (409 `USER_LINKED` si ya tiene uno), y enviar `userId: null` desvincula. La cuenta vinculada recibe los avisos de sus citas.
 
 #### Scenario: Vincular una cuenta ya vinculada
 - **WHEN** se vincula una cuenta que ya tiene perfil de barbero

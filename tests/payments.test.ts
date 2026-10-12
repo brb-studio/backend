@@ -219,6 +219,25 @@ describe("asking to pay by transfer", () => {
     ).toBe(1);
   });
 
+  test("owners and admins are told once, when the transfer is first requested", async () => {
+    const shop = await transferShop();
+    const booking = await bookAsGuest(shop, 2);
+    const body = {
+      appointmentId: booking.id,
+      paymentToken: booking.paymentToken,
+    };
+    const feed = async () =>
+      (await api("GET", "/v1/notifications", shop.asOwner)).body as unknown as {
+        items: { type: string }[];
+      };
+    expect((await feed()).items).toEqual([]);
+    expect((await askTransfer(shop, body)).status).toBe(201);
+    expect((await askTransfer(shop, body)).status).toBe(201);
+    expect((await feed()).items.map((n) => n.type)).toEqual([
+      "payment.transfer_requested",
+    ]);
+  });
+
   test("a signed-in customer pays only their own appointment", async () => {
     const shop = await transferShop();
     const booking = await bookAsGuest(shop, 2);

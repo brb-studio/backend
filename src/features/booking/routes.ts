@@ -11,6 +11,7 @@ import { STAFF } from "../auth/policy";
 import { authOf, requireRole } from "../auth/routes";
 import { paymentToken } from "../payments/token";
 import { requireActiveSubscription } from "../tenancy/subscription";
+import { myDay } from "./my-day";
 import {
   appointmentRange,
   appointmentUpdate,
@@ -88,6 +89,7 @@ export const appointmentRoutes = new Hono<Env>()
       await listAppointments(authOf(c), parse(appointmentRange, c.req.query())),
     ),
   )
+  .get("/my-day", async (c) => c.json(await myDay(authOf(c))))
   .get("/:id", async (c) =>
     c.json(await getAppointment(authOf(c), parseId(c.req.param("id")))),
   )

@@ -64,11 +64,17 @@ async function assertLinkable(
   branchId: ObjectId,
 ) {
   const user = await forTenant(auth.tenantId).users.findOne({ _id: userId });
-  if (user?.role !== "barber" || !user.branchId?.equals(branchId)) {
+  // Owners and admins can be barbers too (anywhere); branch staff only in their own branch.
+  const tenantWide = user?.role === "owner" || user?.role === "admin";
+  if (
+    !user ||
+    !(tenantWide || (user.role === "barber" && user.branchId?.equals(branchId)))
+  ) {
     throw new AppError(422, "VALIDATION", "Invalid request", [
       {
         path: "userId",
-        message: "must be a barber account of the same branch",
+        message:
+          "must be an owner or admin account, or a barber account of the same branch",
       },
     ]);
   }

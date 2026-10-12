@@ -164,3 +164,14 @@ function toAppError(err: Error) {
   }
   return undefined;
 }
+
+/** The barbershop's own site (the host this request came for): where Stripe and emailed links send people back. */
+export function tenantOrigin(c: Context) {
+  const host =
+    c.req.header("X-Tenant-Host") ??
+    c.req.header("X-Forwarded-Host") ??
+    c.req.header("Host") ??
+    "";
+  const local = /(^|\.)localhost(:\d+)?$/.test(host);
+  return `${local ? "http" : "https"}://${host}`;
+}

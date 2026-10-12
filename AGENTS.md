@@ -1,4 +1,4 @@
-# AGENTS — Router obligatorio para IA (MagicStudio backend)
+# AGENTS — Router obligatorio para IA (brb-studio backend)
 
 > Lee este archivo primero. Es la única puerta de entrada. El detalle vive en 3 pilares; no adivines nada que esté escrito ahí.
 

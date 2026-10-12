@@ -65,7 +65,6 @@ export const toStaff = (
 export const bearerOf = (header: string | undefined) =>
   /^Bearer ([\w-]{43})$/.exec(header ?? "")?.[1];
 
-/** Gate for every /platform route except login: a live session of an active platform staff member. */
 export const requirePlatformStaff = createMiddleware<Env>(async (c, next) => {
   const token = bearerOf(c.req.header("Authorization"));
   const staff = token ? await staffOf(token) : null;

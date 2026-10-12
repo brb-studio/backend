@@ -20,6 +20,20 @@ import {
   type VapidKeys,
 } from "../../shared/web-push";
 
+const summaryOf = (
+  appointment: AppointmentDoc,
+  branch: Pick<BranchDoc, "name">,
+  customerName: string,
+  barberName?: string,
+): NotificationDoc["summary"] => ({
+  start: instantToLocal(appointment.startAt, appointment.timeZone),
+  timeZone: appointment.timeZone,
+  customerName,
+  ...(barberName && { barberName }),
+  items: appointment.items.map((item) => item.name),
+  branchName: branch.name,
+});
+
 export async function notifyBarber(
   t: TenantDb,
   event: {
@@ -40,20 +54,55 @@ export async function notifyBarber(
     userId: barber.userId,
     type: event.type,
     appointmentId: appointment._id,
-    summary: {
-      start: instantToLocal(appointment.startAt, appointment.timeZone),
-      timeZone: appointment.timeZone,
-      customerName: event.customerName,
-      items: appointment.items.map((item) => item.name),
-      branchName: event.branch.name,
-    },
+    summary: summaryOf(appointment, event.branch, event.customerName),
     createdAt: new Date(),
   };
   await t.notifications.insertOne(notification, { session });
   return notification;
 }
 
-/** Owners and admins hear about chargebacks: money the platform may have to return. */
+/**
+ * The customer hears about changes made by someone else (staff, or the payment provider's webhook).
+ * Guests have no session to push to, and nobody needs a notice about what they just did themselves.
+ */
+export async function notifyCustomer(
+  t: TenantDb,
+  type: Extract<NotificationDoc["type"], `customer.${string}`>,
+  appointment: AppointmentDoc,
+  session: ClientSession,
+  by?: ObjectId,
+) {
+  if (by?.equals(appointment.customerId)) return undefined;
+  const customer = await t.users.findOne(
+    { _id: appointment.customerId },
+    { session, projection: { name: 1, guest: 1 } },
+  );
+  if (!customer || customer.guest) return undefined;
+  const [barber, branch] = await Promise.all([
+    t.barbers.findOne(
+      { _id: appointment.barberId },
+      { session, projection: { name: 1 } },
+    ),
+    t.branches.findOne(
+      { _id: appointment.branchId },
+      { session, projection: { name: 1 } },
+    ),
+  ]);
+  if (!branch) return undefined;
+  const notification: NotificationDoc = {
+    _id: new ObjectId(),
+    tenantId: appointment.tenantId,
+    userId: customer._id,
+    type,
+    appointmentId: appointment._id,
+    summary: summaryOf(appointment, branch, customer.name, barber?.name),
+    createdAt: new Date(),
+  };
+  await t.notifications.insertOne(notification, { session });
+  return notification;
+}
+
+/** Owners and admins hear about chargebacks and about SPEI transfers waiting for their confirmation. */
 export async function notifyOwners(
   t: TenantDb,
   event: {
@@ -79,13 +128,7 @@ export async function notifyOwners(
     userId: _id,
     type: event.type,
     appointmentId: appointment._id,
-    summary: {
-      start: instantToLocal(appointment.startAt, appointment.timeZone),
-      timeZone: appointment.timeZone,
-      customerName: event.customerName,
-      items: appointment.items.map((item) => item.name),
-      branchName: event.branch.name,
-    },
+    summary: summaryOf(appointment, event.branch, event.customerName),
     createdAt: new Date(),
   }));
   for (const note of notes) {
@@ -94,9 +137,11 @@ export async function notifyOwners(
   return notes;
 }
 
+type PushTenant = WithId<Pick<TenantDoc, "defaultLocale" | "name">>;
+
 /** Push goes out after the commit; a failing push service never undoes a booking or a payment. */
 export function pushAfterCommit(
-  tenant: WithId<Pick<TenantDoc, "defaultLocale">>,
+  tenant: PushTenant,
   notes: (NotificationDoc | undefined)[],
 ) {
   const list = notes.filter((n): n is NotificationDoc => n !== undefined);
@@ -117,16 +162,32 @@ const TITLES: Record<Locale, Record<NotificationDoc["type"], string>> = {
     "appointment.cancelled": "Cita cancelada",
     "appointment.rescheduled": "Cita reprogramada",
     "payment.disputed": "Pago en disputa",
+    "payment.transfer_requested": "Transferencia por confirmar",
+    "customer.booked": "Cita confirmada",
+    "customer.cancelled": "Tu cita fue cancelada",
+    "customer.rescheduled": "Tu cita fue reprogramada",
+    "customer.paid": "Pago recibido",
+    "customer.payment_rejected": "Pago rechazado",
   },
   en: {
     "appointment.booked": "New appointment",
     "appointment.cancelled": "Appointment cancelled",
     "appointment.rescheduled": "Appointment rescheduled",
     "payment.disputed": "Payment disputed",
+    "payment.transfer_requested": "Transfer to confirm",
+    "customer.booked": "Appointment confirmed",
+    "customer.cancelled": "Your appointment was cancelled",
+    "customer.rescheduled": "Your appointment was rescheduled",
+    "customer.paid": "Payment received",
+    "customer.payment_rejected": "Payment rejected",
   },
 };
 
-export function pushMessage(n: NotificationDoc, locale: Locale) {
+export function pushMessage(
+  n: NotificationDoc,
+  locale: Locale,
+  tenantName: string,
+) {
   const when = new Intl.DateTimeFormat(locale, {
     weekday: "short",
     day: "numeric",
@@ -138,11 +199,12 @@ export function pushMessage(n: NotificationDoc, locale: Locale) {
   const items = n.summary.items
     .map((name) => name[locale] ?? name.es ?? name.en ?? "")
     .join(" + ");
+  const forCustomer = n.type.startsWith("customer.");
+  const who = forCustomer ? n.summary.barberName : n.summary.customerName;
   return {
-    title: TITLES[locale][n.type],
-    body: [n.summary.customerName, items, when, n.summary.branchName]
-      .filter(Boolean)
-      .join(" · "),
+    // The barbershop's name tells people with several accounts which one is talking.
+    title: `${TITLES[locale][n.type]} · ${tenantName}`,
+    body: [who, items, when, n.summary.branchName].filter(Boolean).join(" · "),
     tag: n.appointmentId.toHexString(),
     url: `/${locale}/account`,
   };
@@ -161,23 +223,31 @@ export const pushPublicKey = () => vapid?.publicKey;
 
 const PUSH_CONCURRENCY = 20;
 
-export async function deliverPush(
-  tenant: WithId<Pick<TenantDoc, "defaultLocale">>,
-  list: NotificationDoc[],
+export type PushMessage = ReturnType<typeof pushMessage>;
+
+export const deliverPush = (tenant: PushTenant, list: NotificationDoc[]) =>
+  deliverMessages(
+    tenant,
+    list.map((n) => ({
+      userId: n.userId,
+      message: pushMessage(n, tenant.defaultLocale, tenant.name),
+    })),
+  );
+
+export async function deliverMessages(
+  tenant: PushTenant,
+  items: { userId: ObjectId; message: PushMessage }[],
 ) {
-  if (!vapid || list.length === 0) return;
+  if (!vapid || items.length === 0) return;
   const keys = vapid;
   const t = forTenant(tenant._id);
   const devices = await collect(
-    t.pushSubscriptions.find({ userId: { $in: list.map((n) => n.userId) } }),
+    t.pushSubscriptions.find({ userId: { $in: items.map((i) => i.userId) } }),
   );
-  const jobs = list.flatMap((n) =>
+  const jobs = items.flatMap(({ userId, message }) =>
     devices
-      .filter((d) => d.userId.equals(n.userId))
-      .map((device) => ({
-        device,
-        message: pushMessage(n, tenant.defaultLocale),
-      })),
+      .filter((d) => d.userId.equals(userId))
+      .map((device) => ({ device, message })),
   );
   for (let i = 0; i < jobs.length; i += PUSH_CONCURRENCY) {
     const chunk = jobs.slice(i, i + PUSH_CONCURRENCY);
@@ -229,22 +299,25 @@ export async function unsubscribePush(auth: Auth, endpoint: string) {
   });
 }
 
-export async function listNotifications(auth: Auth) {
+export async function listNotifications(
+  auth: Auth,
+  { page, pageSize }: { page: number; pageSize: number },
+) {
   const t = forTenant(auth.tenantId);
-  const [items, unread] = await Promise.all([
+  const mine = { userId: auth.userId };
+  const [items, unread, total] = await Promise.all([
     collect(
       t.notifications
-        .find({ userId: auth.userId })
-        .sort({ createdAt: -1 })
-        .limit(50),
+        .find(mine)
+        .sort({ createdAt: -1, _id: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize),
       toNotification,
     ),
-    t.notifications.countDocuments({
-      userId: auth.userId,
-      readAt: { $exists: false },
-    }),
+    t.notifications.countDocuments({ ...mine, readAt: { $exists: false } }),
+    t.notifications.countDocuments(mine),
   ]);
-  return { unread, items };
+  return { unread, total, page, pageSize, items };
 }
 
 export async function markRead(auth: Auth, ids?: ObjectId[]) {

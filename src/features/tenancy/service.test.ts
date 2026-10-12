@@ -4,11 +4,11 @@ import { isSubscriptionActive, PLAN_LIMITS } from "./subscription";
 
 describe("tenantQuery", () => {
   test("subdomain of the platform domain → slug, ignoring port, case and trailing dot", () => {
-    expect(tenantQuery("MagicStudio.localhost:3000", "localhost")).toEqual({
-      slug: "magicstudio",
+    expect(tenantQuery("BRB-Studio.localhost:3000", "localhost")).toEqual({
+      slug: "brb-studio",
     });
     expect(
-      tenantQuery("barberia-juan.magicstudio.app.", "magicstudio.app"),
+      tenantQuery("barberia-juan.brb-studio.app.", "brb-studio.app"),
     ).toEqual({
       slug: "barberia-juan",
     });
@@ -18,7 +18,7 @@ describe("tenantQuery", () => {
   });
 
   test("any other host → custom domain", () => {
-    expect(tenantQuery("www.barberiajuan.com", "magicstudio.app")).toEqual({
+    expect(tenantQuery("www.barberiajuan.com", "brb-studio.app")).toEqual({
       customDomain: "www.barberiajuan.com",
     });
   });

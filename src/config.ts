@@ -27,6 +27,8 @@ const schema = z
       .regex(/^[a-z0-9]+([.-][a-z0-9]+)*$/)
       .default("localhost"),
     PROXY_SECRET: z.string().min(32, "use at least 32 characters").optional(),
+    /** Lets a scheduler (Vercel Cron, any pinger) call `GET /cron/digest`; without it the route is off. */
+    CRON_SECRET: z.string().min(32, "use at least 32 characters").optional(),
     FRONTEND_URL: z.url().optional(),
     CORS_ORIGINS: z.string().default(""),
     /** Signs the proof of booking guests use to ask for transfer details. */
@@ -91,6 +93,15 @@ const schema = z
       .min(15)
       .max(24 * 60)
       .default(60),
+    /** Transactional email (verification and password reset) through Resend. Both or neither. */
+    RESEND_API_KEY: z.string().min(10).optional(),
+    MAIL_FROM: z
+      .string()
+      .regex(
+        /^([^<>"]+ <)?[^\s<>@]+@[^\s<>@.]+(\.[^\s<>@.]+)+>?$/,
+        'must be "email@example.com" or "Name <email@example.com>"',
+      )
+      .optional(),
     VAPID_PUBLIC_KEY: z
       .string()
       .regex(/^[\w-]{87}$/)
@@ -136,6 +147,10 @@ const schema = z
     path: ["STRIPE_WEBHOOK_SECRET"],
     error:
       "set STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET together, or neither",
+  })
+  .refine((env) => !env.RESEND_API_KEY === !env.MAIL_FROM, {
+    path: ["MAIL_FROM"],
+    error: "set RESEND_API_KEY and MAIL_FROM together, or neither",
   })
   .refine((env) => env.NODE_ENV !== "test" || env.MONGO_DB.endsWith("_test"), {
     path: ["MONGO_DB"],

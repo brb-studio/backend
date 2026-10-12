@@ -442,7 +442,7 @@ export async function appointmentDetail(id: ObjectId) {
   const [{ tenantOf, branchOf, barberOf }, customer, payout] =
     await Promise.all([
       names([a]),
-      platform.customers.findOne({ _id: a.customerId }),
+      platform.users.findOne({ _id: a.customerId, tenantId: a.tenantId }),
       a.payoutId ? platform.payouts.findOne({ _id: a.payoutId }) : null,
     ]);
   const tenant = tenantOf.get(hex(a.tenantId));
@@ -464,7 +464,7 @@ export async function appointmentDetail(id: ObjectId) {
       ? {
           name: customer.name,
           phone: customer.phone ?? null,
-          email: customer.email ?? null,
+          email: customer.email ?? customer.contactEmail ?? null,
         }
       : null,
     items: a.items.map((i) => ({
