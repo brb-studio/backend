@@ -53,3 +53,11 @@ La consulta pública SHALL usar slugs y devolver solo barberos que pueden atende
 #### Scenario: Barbero consulta la agenda del staff
 - **WHEN** un barbero pide disponibilidad del staff de su sucursal
 - **THEN** solo recibe sus propios horarios
+
+### Requirement: Un solo cálculo de horarios libres
+Los horarios libres de un día SHALL calcularse siempre con el mismo motor y las mismas reglas (aviso mínimo, ventana de reserva, descansos, ausencias, reservas vigentes) para la reserva pública, la reserva del staff, la reprogramación y los avisos de la lista de espera (`openSlots`). Ningún aviso MUST anunciar un horario que la reserva no ofrecería.
+
+#### Scenario: Aviso y reserva coinciden
+- **WHEN** la lista de espera avisa que se liberó un día
+- **THEN** la disponibilidad pública de ese día ofrece al menos un horario
+

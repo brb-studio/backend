@@ -212,6 +212,18 @@ describe("online booking", () => {
         })
       ).status,
     ).toBe(404);
+
+    const history = await api(
+      "GET",
+      "/v1/me/appointments/history?page=1&pageSize=1",
+      { host: shop.host, token: user.token },
+    );
+    expect(history.body).toMatchObject({ total: 1, page: 1, pageSize: 1 });
+    expect(
+      (history.body.items as unknown as { id: string; status: string }[]).map(
+        (a) => [a.id, a.status],
+      ),
+    ).toEqual([[String(later.body.id), "cancelled"]]);
   });
 
   test("errors: missing guest details, a barber who can't, an inactive subscription", async () => {

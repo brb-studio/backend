@@ -145,6 +145,8 @@ export const tenantUpdate = z
         coverImage: image.optional(),
       })
       .optional(),
+    reminders: z.strictObject({ enabled: z.boolean() }).optional(),
+    products: z.strictObject({ enabled: z.boolean() }).optional(),
     theme: z
       .partialRecord(
         z.enum(THEME_TOKENS),

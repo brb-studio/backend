@@ -20,8 +20,8 @@ import {
   type VapidKeys,
 } from "../../shared/web-push";
 
-const summaryOf = (
-  appointment: AppointmentDoc,
+export const summaryOf = (
+  appointment: Pick<AppointmentDoc, "startAt" | "timeZone" | "items">,
   branch: Pick<BranchDoc, "name">,
   customerName: string,
   barberName?: string,
@@ -168,6 +168,7 @@ const TITLES: Record<Locale, Record<NotificationDoc["type"], string>> = {
     "customer.rescheduled": "Tu cita fue reprogramada",
     "customer.paid": "Pago recibido",
     "customer.payment_rejected": "Pago rechazado",
+    "customer.reminder": "Recordatorio de tu cita",
   },
   en: {
     "appointment.booked": "New appointment",
@@ -180,6 +181,7 @@ const TITLES: Record<Locale, Record<NotificationDoc["type"], string>> = {
     "customer.rescheduled": "Your appointment was rescheduled",
     "customer.paid": "Payment received",
     "customer.payment_rejected": "Payment rejected",
+    "customer.reminder": "Reminder: your appointment",
   },
 };
 

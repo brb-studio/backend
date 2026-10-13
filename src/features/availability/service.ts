@@ -316,3 +316,34 @@ export async function staffAvailability(
     days: query.days,
   });
 }
+
+export async function openSlots(
+  tenant: Pick<TenantDoc, "_id">,
+  branch: BranchDoc,
+  request: Request,
+  query: { date: string; barberId?: ObjectId },
+  now = Date.now(),
+) {
+  const t = forTenant(tenant._id);
+  const barbers = await collect(
+    t.barbers
+      .find({
+        branchId: branch._id,
+        active: true,
+        ...(query.barberId && { _id: query.barberId }),
+      })
+      .project<SlotBarber>(SLOT_BARBER_FIELDS),
+  );
+  const result = await availability(t, branch, request, barbers, {
+    now,
+    earliest: now + branch.booking.minNoticeMin * 60_000,
+    windowDays: branch.booking.windowDays,
+    from: query.date,
+    days: 1,
+  });
+  return result.barbers.flatMap((barber) =>
+    barber.days
+      .filter((day) => day.date === query.date)
+      .flatMap((day) => day.slots.map((slot) => slot.time)),
+  );
+}

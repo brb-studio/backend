@@ -523,6 +523,41 @@ export async function listMine(tenant: TenantDoc, auth: Auth) {
   );
 }
 
+/** Past or closed appointments: everything not still upcoming. */
+export async function listMyHistory(
+  tenant: TenantDoc,
+  auth: Auth,
+  { page, pageSize }: { page: number; pageSize: number },
+) {
+  const t = forTenant(tenant._id);
+  await sweepHolds(tenant);
+  const now = new Date();
+  const past: Filter<AppointmentDoc> = {
+    customerId: auth.userId,
+    $nor: [
+      {
+        status: { $in: ["confirmed", "pending_payment"] },
+        endAt: { $gt: now },
+      },
+    ],
+  };
+  const [list, total] = await Promise.all([
+    collect(
+      t.appointments
+        .find(past)
+        .sort({ startAt: -1, _id: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize),
+    ),
+    t.appointments.countDocuments(past),
+  ]);
+  const { branchOf, barberOf } = await lookups(t, list);
+  const items = list.map((a) =>
+    customerView(a, branchOf(a.branchId), barberOf(a.barberId), now.getTime()),
+  );
+  return { total, page, pageSize, items };
+}
+
 export async function cancelMine(tenant: TenantDoc, auth: Auth, id: ObjectId) {
   const t = forTenant(tenant._id);
   const appointment = await t.appointments.findOne({

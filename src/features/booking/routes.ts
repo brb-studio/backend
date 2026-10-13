@@ -15,6 +15,7 @@ import { myDay } from "./my-day";
 import {
   appointmentRange,
   appointmentUpdate,
+  historyQuery,
   publicBooking,
   publicQuote,
   rescheduleMineBody,
@@ -28,6 +29,7 @@ import {
   getAppointment,
   listAppointments,
   listMine,
+  listMyHistory,
   quote,
   rescheduleMine,
   rescheduleSlots,
@@ -54,6 +56,15 @@ export const meRoutes = new Hono<Env>()
   .use(requireRole("customer"))
   .get("/appointments", async (c) =>
     c.json(await listMine(c.var.tenant, authOf(c))),
+  )
+  .get("/appointments/history", async (c) =>
+    c.json(
+      await listMyHistory(
+        c.var.tenant,
+        authOf(c),
+        parse(historyQuery, c.req.query()),
+      ),
+    ),
   )
   .post("/appointments/:id/cancel", async (c) => {
     await cancelMine(c.var.tenant, authOf(c), parseId(c.req.param("id")));

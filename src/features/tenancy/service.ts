@@ -141,7 +141,6 @@ export async function updateBranch(
       { $and: [{ _id: id }, visibleTo(auth)] },
       {
         $set: { ...fields, ...bookingPaths, updatedAt: new Date() },
-        // A saved gallery replaces the single photo of older documents.
         ...(fields.images && { $unset: { image: "" } }),
       },
       { returnDocument: "after" },
@@ -153,7 +152,6 @@ export async function updateBranch(
   return branch;
 }
 
-/** How a visitor can pay: manual transfer, and online (card or transfer) with the deposit rule and hold times. */
 function publicPayments(tenant: TenantDoc) {
   const online = onlinePaymentsReady(tenant);
   return {
@@ -180,6 +178,7 @@ export async function publicTenant(tenant: TenantDoc) {
     theme: tenant.theme ?? {},
     brand: tenant.brand,
     payments: publicPayments(tenant),
+    products: tenant.products?.enabled === true,
     branches: branches.map(({ active: _, ...branch }) => toBranch(branch)),
   };
 }
@@ -193,6 +192,8 @@ export const toTenant = (tenant: TenantDoc) => ({
   defaultLocale: tenant.defaultLocale,
   theme: tenant.theme ?? {},
   brand: tenant.brand,
+  reminders: { enabled: tenant.reminders?.enabled ?? true },
+  products: { enabled: tenant.products?.enabled ?? false },
   subscription: tenant.subscription,
 });
 

@@ -97,6 +97,10 @@ export type TenantDoc = {
   };
   /** Online payment rules: when `enabled`, booking online requires paying at least `percentBps` of the total. */
   deposit?: { enabled: boolean; percentBps: number };
+  /** Reminders to customers 24 h and 2 h before their appointment; on unless `enabled` is false. */
+  reminders?: { enabled: boolean };
+  /** Optional module: products customers set aside and staff hand over. Off unless `enabled`. */
+  products?: { enabled: boolean };
   billing?: {
     /** Legacy Stripe subscription ids and cancellation date; nothing reads or writes them anymore. */
     stripeCustomerId?: string;
@@ -447,6 +451,7 @@ export const NOTIFICATION_TYPES = [
   "customer.rescheduled",
   "customer.paid",
   "customer.payment_rejected",
+  "customer.reminder",
 ] as const;
 
 export type NotificationDoc = {
@@ -492,6 +497,89 @@ export type PushSubscriptionDoc = {
 
 export const pushSubscriptions =
   db.collection<PushSubscriptionDoc>("pushSubscriptions");
+
+export type ProductDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  /** Sold at one branch only; without it, at every branch. */
+  branchId?: ObjectId;
+  slug: string;
+  name: Localized;
+  description?: Localized;
+  priceMinor: number;
+  image?: string;
+  images?: string[];
+  category?: string;
+  /** Units left. Absent = not counted (never runs out). */
+  stock?: number;
+  position: number;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+export const products = db.collection<ProductDoc>("products");
+
+export const PRODUCT_ORDER_STATUSES = [
+  "reserved",
+  "delivered",
+  "cancelled",
+  "expired",
+] as const;
+export const PRODUCT_PAYMENT_METHODS = ["cash", "spei"] as const;
+
+/** Products a customer set aside at a branch, handed over (and paid, in cash or by transfer) by staff. */
+export type ProductOrderDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  branchId: ObjectId;
+  customerId: ObjectId;
+  status: (typeof PRODUCT_ORDER_STATUSES)[number];
+  items: {
+    productId: ObjectId;
+    name: Localized;
+    priceMinor: number;
+    quantity: number;
+  }[];
+  currency: string;
+  totalMinor: number;
+  /** Past this instant an unclaimed reservation is released. */
+  expiresAt: Date;
+  payment?: {
+    method: (typeof PRODUCT_PAYMENT_METHODS)[number];
+    receivedBy: ObjectId;
+    at: Date;
+  };
+  closedAt?: Date;
+  closedBy?: ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+};
+export const productOrders = db.collection<ProductOrderDoc>("productOrders");
+
+export const WAITLIST_STATUSES = ["waiting", "notified"] as const;
+
+/** A customer asking to be told when a time that fits frees up on a day. Gone when the day is over. */
+export type WaitlistDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  customerId: ObjectId;
+  branchId: ObjectId;
+  /** What they want, frozen as the visitor saw it. */
+  item: { kind: "service" | "package"; slug: string; name: Localized };
+  barberId?: ObjectId;
+  /** Local date in the branch's zone, `YYYY-MM-DD`. */
+  date: string;
+  /** Local `HH:MM` window the visit must start in. */
+  from?: string;
+  to?: string;
+  status: (typeof WAITLIST_STATUSES)[number];
+  notifiedAt?: Date;
+  /** End of `date` in the branch's zone: MongoDB's TTL index deletes the entry then. */
+  expiresAt: Date;
+  createdAt: Date;
+};
+
+export const waitlist = db.collection<WaitlistDoc>("waitlist");
 
 /** Platform staff work across every barbershop; they live outside any tenant. */
 export type PlatformStaffDoc = {
@@ -616,6 +704,8 @@ export const specs: CollectionSpec[] = [
             enabled: bool,
             percentBps: int(100, 10_000),
           }),
+          reminders: object(["enabled"], { enabled: bool }),
+          products: object(["enabled"], { enabled: bool }),
           billing: {
             bsonType: "object",
             properties: {
@@ -1108,6 +1198,8 @@ export const specs: CollectionSpec[] = [
         key: { tenantId: 1, customerId: 1, startAt: -1 },
         name: "tenant_customer_start",
       },
+      // The reminder sweep reads one barbershop's next 24 hours across every branch.
+      { key: { tenantId: 1, startAt: 1 }, name: "tenant_start" },
       {
         key: { "payment.intentId": 1 },
         name: "payment_intent",
@@ -1244,6 +1336,147 @@ export const specs: CollectionSpec[] = [
     indexes: [
       { key: { endpoint: 1 }, name: "endpoint_unique", unique: true },
       { key: { tenantId: 1, userId: 1 }, name: "tenant_user" },
+    ],
+  },
+  {
+    name: "products",
+    validator: {
+      $jsonSchema: object(
+        [
+          "tenantId",
+          "slug",
+          "name",
+          "priceMinor",
+          "position",
+          "active",
+          "createdAt",
+          "updatedAt",
+        ],
+        {
+          tenantId: objectId,
+          branchId: objectId,
+          slug: string(),
+          name: localized,
+          description: localized,
+          priceMinor: int(0, 10_000_000),
+          image: string(),
+          images: { bsonType: "array", maxItems: 12, items: string() },
+          category: string({ maxLength: 40 }),
+          stock: int(0, 1_000_000),
+          position: int(0, 10_000),
+          active: bool,
+          ...timestamps,
+        },
+      ),
+    },
+    indexes: [
+      {
+        key: { tenantId: 1, slug: 1 },
+        name: "tenant_slug_unique",
+        unique: true,
+      },
+    ],
+  },
+  {
+    name: "productOrders",
+    validator: {
+      $jsonSchema: object(
+        [
+          "tenantId",
+          "branchId",
+          "customerId",
+          "status",
+          "items",
+          "currency",
+          "totalMinor",
+          "expiresAt",
+          "createdAt",
+          "updatedAt",
+        ],
+        {
+          tenantId: objectId,
+          branchId: objectId,
+          customerId: objectId,
+          status: oneOf(PRODUCT_ORDER_STATUSES),
+          items: {
+            bsonType: "array",
+            minItems: 1,
+            maxItems: 10,
+            items: object(["productId", "name", "priceMinor", "quantity"], {
+              productId: objectId,
+              name: localized,
+              priceMinor: int(0, 10_000_000),
+              quantity: int(1, 99),
+            }),
+          },
+          currency: string({ pattern: "^[A-Z]{3}$" }),
+          totalMinor: int(0, 100_000_000),
+          expiresAt: date,
+          payment: object(["method", "receivedBy", "at"], {
+            method: oneOf(PRODUCT_PAYMENT_METHODS),
+            receivedBy: objectId,
+            at: date,
+          }),
+          closedAt: date,
+          closedBy: objectId,
+          ...timestamps,
+        },
+      ),
+    },
+    indexes: [
+      {
+        key: { tenantId: 1, customerId: 1, createdAt: -1 },
+        name: "tenant_customer_created",
+      },
+      // Staff read what is waiting at a branch; the sweep reads what has expired.
+      {
+        key: { tenantId: 1, status: 1, expiresAt: 1 },
+        name: "tenant_status_expires",
+      },
+    ],
+  },
+  {
+    name: "waitlist",
+    validator: {
+      $jsonSchema: object(
+        [
+          "tenantId",
+          "customerId",
+          "branchId",
+          "item",
+          "date",
+          "status",
+          "expiresAt",
+          "createdAt",
+        ],
+        {
+          tenantId: objectId,
+          customerId: objectId,
+          branchId: objectId,
+          item: object(["kind", "slug", "name"], {
+            kind: oneOf(["service", "package"]),
+            slug: string({ maxLength: 64 }),
+            name: localized,
+          }),
+          barberId: objectId,
+          date: string({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+          from: string({ pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }),
+          to: string({ pattern: "^([01]\\d|2[0-3]):[0-5]\\d$" }),
+          status: oneOf(WAITLIST_STATUSES),
+          notifiedAt: date,
+          expiresAt: date,
+          createdAt: date,
+        },
+      ),
+    },
+    indexes: [
+      { key: { expiresAt: 1 }, name: "expiresAt_ttl", expireAfterSeconds: 0 },
+      // The notifier walks the waiting entries oldest first; a customer reads their own.
+      {
+        key: { tenantId: 1, status: 1, createdAt: 1 },
+        name: "tenant_status_created",
+      },
+      { key: { tenantId: 1, customerId: 1 }, name: "tenant_customer" },
     ],
   },
   {

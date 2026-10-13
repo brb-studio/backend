@@ -1,7 +1,7 @@
 import { app, dbReady } from "./app";
 import { config } from "./config";
 import { client } from "./db/client";
-import { runDigests } from "./features/platform/digest";
+import { runScheduled } from "./features/platform/digest";
 
 await dbReady();
 
@@ -12,11 +12,10 @@ const server = Bun.serve({
   idleTimeout: 30,
 });
 
-// A long-running server keeps its own clock; on serverless a scheduler calls GET /cron/digest instead.
-const digestTimer = setInterval(
+const scheduleTimer = setInterval(
   () =>
-    void runDigests().catch((err: unknown) =>
-      console.error(`digest failed: ${String(err)}`),
+    void runScheduled().catch((err: unknown) =>
+      console.error(`scheduled jobs failed: ${String(err)}`),
     ),
   10 * 60 * 1000,
 );
@@ -25,7 +24,7 @@ console.log(`listening on ${server.url} (db: ${config.MONGO_DB})`);
 
 async function shutdown(signal: string) {
   console.log(`${signal}: shutting down`);
-  clearInterval(digestTimer);
+  clearInterval(scheduleTimer);
   await server.stop();
   await client.close();
   process.exit(0);

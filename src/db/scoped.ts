@@ -22,6 +22,8 @@ export {
   PAYMENT_METHODS,
   PAYMENT_STATUSES,
   PLANS,
+  PRODUCT_ORDER_STATUSES,
+  PRODUCT_PAYMENT_METHODS,
   REFERRAL_STATUSES,
   ROLES,
   STATUSES,
@@ -82,6 +84,9 @@ export const forTenant = (tenantId: ObjectId) => ({
   pushSubscriptions: scope(raw.pushSubscriptions, tenantId),
   images: scope(raw.images, tenantId),
   payments: scope(raw.payments, tenantId),
+  waitlist: scope(raw.waitlist, tenantId),
+  products: scope(raw.products, tenantId),
+  productOrders: scope(raw.productOrders, tenantId),
 });
 
 export type TenantDb = ReturnType<typeof forTenant>;

@@ -38,6 +38,20 @@ Owner y admin SHALL poder cambiar el nombre, la marca (`instagramUrl` https, `au
 - **WHEN** se envía un token fuera de la lista o un valor con `;`, `{` o comillas
 - **THEN** la respuesta es 422 `VALIDATION`
 
+### Requirement: Recordatorios activables
+Owner y admin SHALL poder apagar o encender los recordatorios de cita de su barbería con `reminders.enabled` en `PATCH /v1/tenant` (encendidos por defecto); `GET /v1/tenant` lo devuelve siempre. El cuerpo es estricto.
+
+#### Scenario: Apagar recordatorios
+- **WHEN** el owner envía `{ "reminders": { "enabled": false } }`
+- **THEN** la barbería deja de enviar recordatorios a sus clientes
+
+### Requirement: Módulo de productos activable
+Owner y admin SHALL poder activar el módulo de productos con `products.enabled` en `PATCH /v1/tenant` (apagado por defecto). El detalle del módulo vive en la capability `products`.
+
+#### Scenario: Activar productos
+- **WHEN** el owner envía `{ "products": { "enabled": true } }`
+- **THEN** `GET /v1/public/tenant` devuelve `products: true`
+
 ### Requirement: Sucursales
 Cada barbería SHALL tener una o más sucursales con slug único, nombre, dirección de 1 a 4 líneas, teléfono opcional en E.164, `mapsUrl` https opcional, hasta 12 fotos y zona horaria IANA. Owner y admin crean sucursales; un manager edita la suya, pero solo owner y admin cambian `active`. Manager y barbero solo ven su sucursal.
 

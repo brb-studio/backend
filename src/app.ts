@@ -37,6 +37,12 @@ import { stripeWebhookRoutes } from "./features/payments/webhook";
 import { cronRoutes } from "./features/platform/cron";
 import { platformRoutes } from "./features/platform/routes";
 import { earningsRoutes } from "./features/platform/tenant-routes";
+import {
+  myProductOrderRoutes,
+  pickupRoutes,
+  productRoutes,
+  publicProductRoutes,
+} from "./features/products/routes";
 import { promotionRoutes } from "./features/promotions/routes";
 import {
   branchRoutes,
@@ -44,6 +50,7 @@ import {
   resolveTenant,
   tenantRoutes,
 } from "./features/tenancy/routes";
+import { waitlistRoutes } from "./features/waitlist/routes";
 import { corsOrigin } from "./shared/cors";
 import { type Env, notFound, onError } from "./shared/http";
 
@@ -128,6 +135,11 @@ export const app = new Hono<Env>()
   .route("/v1/public", paymentPublicRoutes)
   .route("/v1/payments", paymentStaffRoutes)
   .route("/v1/me", meRoutes)
+  .route("/v1/me/waitlist", waitlistRoutes)
+  .route("/v1/me/product-orders", myProductOrderRoutes)
+  .route("/v1/public/products", publicProductRoutes)
+  .route("/v1/products", productRoutes)
+  .route("/v1/product-orders", pickupRoutes)
   .route("/v1/tenant", tenantRoutes)
   .route("/v1/billing", billingRoutes)
   .route("/v1/branches", branchRoutes)
