@@ -24,53 +24,50 @@ const register = (host: string, address: string, extra = {}) =>
   });
 
 describe("email verification", () => {
-  test("registering emails a single-use link that verifies the address", async () => {
+  test("registering emails a single-use link that verifies the address and opens sign-in", async () => {
     const { host } = await createShop();
     const address = email();
     const res = await register(host, address, { locale: "en" });
     expect(res.status).toBe(201);
     expect(res.body.user).toMatchObject({ emailVerified: false });
-    const token = String(res.body.token);
 
     const mail = await mailTo(address);
     expect(mail.subject).toContain("Confirm your email");
     expect(mail.text).toContain(`http://${host}/en/verify-email?token=`);
 
+    const login = () =>
+      api("POST", "/v1/auth/login", {
+        host,
+        body: { email: address, password: PASSWORD },
+      });
+    expect((await login()).status).toBe(403);
     const verify = (t: string) =>
       api("POST", "/v1/auth/verify-email", { host, body: { token: t } });
-    expect((await verify(tokenOf(mail))).status).toBe(204);
-    const me = await api("GET", "/v1/auth/me", { host, token });
-    expect(me.body.user).toMatchObject({ emailVerified: true });
-    const again = await verify(tokenOf(mail));
+    // Signing in before confirming sent a fresh link, which retired the first one.
+    const fresh = await mailTo(address, 2);
+    expect((await verify(tokenOf(mail))).status).toBe(400);
+    expect((await verify(tokenOf(fresh))).status).toBe(204);
+    const ok = await login();
+    expect(ok.status).toBe(200);
+    expect(ok.body.user).toMatchObject({ emailVerified: true });
+    const again = await verify(tokenOf(fresh));
     expect(again.status).toBe(400);
     expect(again.body.error?.code).toBe("INVALID_TOKEN");
   });
 
-  test("a new link retires the old one, and a verified account gets no more", async () => {
-    const { host } = await createShop();
-    const address = email();
-    const res = await register(host, address);
-    const token = String(res.body.token);
-    const first = await mailTo(address);
-    const ask = () =>
-      api("POST", "/v1/auth/verify-email/request", {
-        host,
-        token,
-        body: { locale: "es" },
-      });
-    expect((await ask()).status).toBe(204);
-    const second = await mailTo(address, 2);
-    expect(second.subject).toContain("Confirma tu correo");
-    const verify = (m: Mail) =>
-      api("POST", "/v1/auth/verify-email", {
-        host,
-        body: { token: tokenOf(m) },
-      });
-    expect((await verify(first)).status).toBe(400);
-    expect((await verify(second)).status).toBe(204);
-    await ask();
+  test("a verified account is not mailed again", async () => {
+    const { host, tenant } = await createShop();
+    const { user, token } = await createUser(tenant, "customer");
+    const before = outbox.length;
+    const ask = await api("POST", "/v1/auth/verify-email/request", {
+      host,
+      token,
+      body: { locale: "es" },
+    });
+    expect(ask.status).toBe(204);
     await Bun.sleep(150);
-    expect(outbox.filter((m) => m.to === address)).toHaveLength(2);
+    expect(outbox.length).toBe(before);
+    expect(user.emailVerifiedAt).toBeDefined();
   });
 
   test("an expired or made-up link is refused, and anonymous callers can't ask for one", async () => {
@@ -101,10 +98,12 @@ describe("email verification", () => {
 
 describe("password recovery", () => {
   test("a reset link sets a new password, signs everyone out and works once", async () => {
-    const { host } = await createShop();
+    const { host, tenant } = await createShop();
     const address = email();
-    const reg = await register(host, address);
-    const oldToken = String(reg.body.token);
+    const { token: oldToken } = await createUser(tenant, "customer", {
+      email: address,
+      emailVerifiedAt: undefined,
+    });
 
     const forgot = (to: string) =>
       api("POST", "/v1/auth/password/forgot", {
@@ -112,7 +111,7 @@ describe("password recovery", () => {
         body: { email: to, locale: "es" },
       });
     expect((await forgot(address)).status).toBe(204);
-    const mail = await mailTo(address, 2);
+    const mail = await mailTo(address);
     expect(mail.subject).toContain("Restablece");
     expect(mail.text).toContain(`http://${host}/es/reset-password?token=`);
 

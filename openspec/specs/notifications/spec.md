@@ -12,6 +12,9 @@ Cada reserva, cancelación y reprogramación SHALL guardar, en la misma transacc
 - **WHEN** un barbero crea una cita para sí mismo desde el panel
 - **THEN** no recibe aviso de esa cita
 
+### Requirement: Aviso también por correo
+Cada aviso guardado (barbero, cliente, owners y admins) SHALL enviarse además por correo, tras confirmar la transacción, al correo de la cuenta destinataria activa, con el mismo título y cuerpo del push y el enlace a la barbería. Un fallo del proveedor de correo MUST NOT deshacer la reserva ni el pago. Los recordatorios mantienen su propio correo (no se duplica). No hay interruptor por usuario todavía.
+
 ### Requirement: Avisos al cliente
 El cliente con cuenta SHALL recibir un aviso (`customer.booked`, `customer.cancelled`, `customer.rescheduled`, `customer.paid`, `customer.payment_rejected` o `customer.reminder`) cuando alguien más cambia su cita o su pago: el staff agenda, cancela o reprograma, el staff confirma o rechaza su transferencia, o el proveedor confirma su pago en línea. Se guarda en la misma transacción. MUST NOT generarse aviso por lo que el propio cliente hace (cancelar, o reservar en línea sin pago pendiente) ni para invitados, que no tienen sesión.
 

@@ -28,7 +28,7 @@ El sistema SHALL responder 401 `INVALID_CREDENTIALS` tanto si el correo no exist
 - **THEN** el undécimo responde 429 `RATE_LIMITED` aunque la contraseña sea correcta
 
 ### Requirement: Sesiones opacas ligadas a su barbería
-Iniciar sesión o registrarse SHALL devolver un token aleatorio de 256 bits que se envía como `Authorization: Bearer`. Solo se guarda su SHA-256. La sesión dura 30 días, se renueva por otros 30 cuando le queda menos de la mitad y MongoDB borra las vencidas. Una sesión MUST valer solo en el host de su propia barbería y solo mientras la cuenta esté activa.
+Iniciar sesión SHALL devolver un token aleatorio de 256 bits que se envía como `Authorization: Bearer`. Solo se guarda su SHA-256. La sesión dura 30 días, se renueva por otros 30 cuando le queda menos de la mitad y MongoDB borra las vencidas. Una sesión MUST valer solo en el host de su propia barbería y solo mientras la cuenta esté activa.
 
 #### Scenario: Token usado en otra barbería
 - **WHEN** un token de la barbería A se presenta en el host de la barbería B
@@ -46,7 +46,11 @@ Un usuario con sesión SHALL poder cambiar su contraseña enviando la actual. Si
 - **THEN** sigue con sesión en ese teléfono y su sesión de la computadora deja de valer
 
 ### Requirement: Verificación de correo
-Registrarse SHALL enviar al correo un enlace de un solo uso que vence en 24 horas; la cuenta funciona de inmediato sin verificar. `POST /v1/auth/verify-email` con el token marca `emailVerifiedAt` y `GET /v1/auth/me` devuelve `emailVerified`. Un usuario con sesión puede pedir otro enlace (`POST /v1/auth/verify-email/request`, 3 por hora), y el nuevo MUST retirar el anterior. Solo se guarda el SHA-256 del token en `authTokens`, con TTL. Un enlace usado, vencido, inventado, de otra barbería o de otro propósito responde 400 `INVALID_TOKEN`. El sistema MUST NOT unir cuentas de distintas barberías por correo, ni siquiera verificado, sin una decisión de producto explícita.
+Registrarse SHALL enviar al correo un enlace de un solo uso que vence en 24 horas; el registro MUST NOT abrir sesión (responde 201 con la cuenta y sin token). Un cliente (`customer`) con el correo sin verificar MUST NOT iniciar sesión: con la contraseña correcta recibe 403 `EMAIL_NOT_VERIFIED` y se le reenvía un enlace nuevo (dentro del límite de 3 por hora); con una incorrecta, el 401 de siempre. El personal creado por el dueño no necesita verificar para entrar. `POST /v1/auth/verify-email` con el token marca `emailVerifiedAt` y `GET /v1/auth/me` devuelve `emailVerified`. Un usuario con sesión puede pedir otro enlace (`POST /v1/auth/verify-email/request`, 3 por hora), y el nuevo MUST retirar el anterior. Solo se guarda el SHA-256 del token en `authTokens`, con TTL. Un enlace usado, vencido, inventado, de otra barbería o de otro propósito responde 400 `INVALID_TOKEN`. El sistema MUST NOT unir cuentas de distintas barberías por correo, ni siquiera verificado, sin una decisión de producto explícita.
+
+#### Scenario: Cuenta sin confirmar
+- **WHEN** alguien se registra con un correo inventado y luego intenta iniciar sesión
+- **THEN** no recibe token (403 `EMAIL_NOT_VERIFIED`) hasta seguir el enlace enviado a ese correo
 
 #### Scenario: Enlace reutilizado
 - **WHEN** alguien usa por segunda vez el mismo enlace de verificación

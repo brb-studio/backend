@@ -93,7 +93,7 @@ export async function register(
     }
     throw err;
   }
-  return { user, ...(await createSession(user, now)) };
+  return { user };
 }
 
 let timingHash: Promise<string> | undefined;
@@ -102,6 +102,7 @@ export async function login(
   tenantId: ObjectId,
   email: string,
   password: string,
+  onUnverified?: (user: UserDoc) => void,
 ) {
   if (
     !(await hit(`login:${tenantId}:${email}`, LOGIN_ATTEMPTS, LOGIN_WINDOW_MS))
@@ -120,6 +121,11 @@ export async function login(
   );
   if (!user || !valid || !user.active) {
     throw new AppError(401, "INVALID_CREDENTIALS", "Invalid email or password");
+  }
+  // Only reached with the right password, so this never confirms an address to a stranger.
+  if (user.role === "customer" && !user.emailVerifiedAt) {
+    onUnverified?.(user);
+    throw new AppError(403, "EMAIL_NOT_VERIFIED", "Confirm your email first");
   }
   return { user, ...(await createSession(user)) };
 }

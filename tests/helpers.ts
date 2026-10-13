@@ -52,6 +52,7 @@ export async function createUser(
       memoryCost: 1024,
       timeCost: 1,
     }),
+    emailVerifiedAt: now,
     createdAt: now,
     updatedAt: now,
     ...extra,
@@ -241,3 +242,18 @@ export const guestBooking = (
   customer: { name: "Ana López", phone: nextPhone() },
   ...extra,
 });
+
+/** Registers through the API, confirms the address the way the emailed link would, then signs in. */
+export async function signUp(host: string, body: Record<string, unknown>) {
+  const res = await api("POST", "/v1/auth/register", { host, body });
+  const { id } = res.body.user as { id: string };
+  await users.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { emailVerifiedAt: new Date() } },
+  );
+  const login = await api("POST", "/v1/auth/login", {
+    host,
+    body: { email: body.email, password: body.password },
+  });
+  return { id, token: String(login.body.token) };
+}

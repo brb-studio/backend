@@ -3,6 +3,7 @@ import { ObjectId } from "mongodb";
 import { app } from "../src/app";
 import { users } from "../src/db/collections";
 import { myDay } from "../src/features/booking/my-day";
+import { outbox } from "../src/shared/mail";
 import {
   api,
   bookingShop,
@@ -70,6 +71,30 @@ describe("barber notifications", () => {
     ).toBe(204);
     expect((await feed(mateo)).unread).toBe(0);
     expect((await feed(shop.asOwner)).items).toEqual([]);
+  });
+
+  test("every notice also goes out by email to its recipient", async () => {
+    const shop = await bookingShop();
+    const barberAccount = await createUser(shop.tenant, "barber", {
+      branchId: new ObjectId(shop.branchId),
+    });
+    await api("PATCH", `/v1/barbers/${shop.barbers.mateo}`, {
+      ...shop.asOwner,
+      body: { userId: barberAccount.user._id.toHexString() },
+    });
+    await api("POST", "/v1/public/appointments", {
+      host: shop.host,
+      body: guestBooking(at(shop, 2, "11:00"), {
+        customer: { name: "Ana López", phone: "+526640000002" },
+      }),
+    });
+    const to = barberAccount.user.email as string;
+    for (let i = 0; i < 100 && !outbox.some((m) => m.to === to); i++) {
+      await Bun.sleep(20);
+    }
+    const mail = outbox.find((m) => m.to === to);
+    expect(mail?.subject).toContain("Nueva cita");
+    expect(mail?.text).toContain("Ana López");
   });
 
   test("the feed pages by page and pageSize and reports the total", async () => {

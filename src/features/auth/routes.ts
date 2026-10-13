@@ -93,15 +93,19 @@ export const authRoutes = new Hono<Env>()
   .post("/register", async (c) => {
     const { locale, ...input } = await readJson(c, registerSchema);
     const result = await register(c.var.tenant._id, input);
-    // The account works right away; the confirmation email follows without holding the response.
+    // There is no session until the emailed link is followed, so a made-up address gets nowhere.
     sendVerification(c.var.tenant, result.user, linkOf(c, locale)).catch(
       logMailError,
     );
-    return c.json(session(result), 201);
+    return c.json({ user: toUser(result.user) }, 201);
   })
   .post("/login", async (c) => {
     const { email, password } = await readJson(c, loginSchema);
-    return c.json(session(await login(c.var.tenant._id, email, password)));
+    const link = linkOf(c);
+    const result = await login(c.var.tenant._id, email, password, (user) =>
+      requestVerification(c.var.tenant, user._id, link).catch(logMailError),
+    );
+    return c.json(session(result));
   })
   .post("/logout", requireRole(...ANYONE), async (c) => {
     await logout(bearer(c) ?? "");

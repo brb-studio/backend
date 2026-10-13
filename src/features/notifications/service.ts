@@ -10,9 +10,11 @@ import {
   platform,
   type TenantDb,
   type TenantDoc,
+  type UserDoc,
 } from "../../db/scoped";
 import { collect } from "../../shared/cursor";
 import type { Auth } from "../../shared/http";
+import { sendMail } from "../../shared/mail";
 import { instantToLocal } from "../../shared/time";
 import {
   type PushTarget,
@@ -138,22 +140,49 @@ export async function notifyOwners(
 }
 
 type PushTenant = WithId<Pick<TenantDoc, "defaultLocale" | "name">>;
+type MailTenant = PushTenant & Pick<TenantDoc, "slug" | "customDomain">;
 
 /** Push goes out after the commit; a failing push service never undoes a booking or a payment. */
 export function pushAfterCommit(
-  tenant: PushTenant,
+  tenant: MailTenant,
   notes: (NotificationDoc | undefined)[],
 ) {
   const list = notes.filter((n): n is NotificationDoc => n !== undefined);
-  deliverPush(tenant, list).catch((err: unknown) =>
-    console.error(
-      JSON.stringify({
-        level: "error",
-        event: "push_failed",
-        message: String(err),
-      }),
-    ),
+  Promise.all([deliverPush(tenant, list), deliverEmail(tenant, list)]).catch(
+    (err: unknown) =>
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "push_failed",
+          message: String(err),
+        }),
+      ),
   );
+}
+
+/** The same notice by email, so people who never installed the app or muted the phone still hear about it. */
+export async function deliverEmail(
+  tenant: MailTenant,
+  list: NotificationDoc[],
+) {
+  if (list.length === 0) return;
+  const recipients = await collect(
+    forTenant(tenant._id)
+      .users.find({ _id: { $in: list.map((n) => n.userId) }, active: true })
+      .project<WithId<Pick<UserDoc, "email">>>({ email: 1 }),
+  );
+  const host =
+    tenant.customDomain ?? `${tenant.slug}.${config.PLATFORM_DOMAIN}`;
+  for (const note of list) {
+    const to = recipients.find((u) => u._id.equals(note.userId))?.email;
+    if (!to) continue;
+    const message = pushMessage(note, tenant.defaultLocale, tenant.name);
+    await sendMail({
+      to,
+      subject: message.title,
+      text: `${message.body}\n\n${host}${message.url}`,
+    });
+  }
 }
 
 const TITLES: Record<Locale, Record<NotificationDoc["type"], string>> = {

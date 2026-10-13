@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { ObjectId } from "mongodb";
 import { sessions, users } from "../src/db/collections";
-import { api, createTenant, createUser, PASSWORD } from "./helpers";
+import { api, createTenant, createUser, PASSWORD, signUp } from "./helpers";
 
 const ana = {
   name: "Ana",
@@ -10,7 +11,7 @@ const ana = {
 };
 
 describe("register and login", () => {
-  test("a customer registers, gets a session, and /me works", async () => {
+  test("a customer registers without a session and signs in only after confirming the email", async () => {
     const { host } = await createTenant();
     const res = await api("POST", "/v1/auth/register", { host, body: ana });
     expect(res.status).toBe(201);
@@ -23,14 +24,38 @@ describe("register and login", () => {
       active: true,
       emailVerified: false,
     });
-    expect(String(res.body.token)).toHaveLength(43);
+    expect(res.body.token).toBeUndefined();
 
+    const credentials = { email: "ana@example.com", password: ana.password };
+    const blocked = await api("POST", "/v1/auth/login", {
+      host,
+      body: credentials,
+    });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.error?.code).toBe("EMAIL_NOT_VERIFIED");
+    expect(blocked.body.token).toBeUndefined();
+    // A wrong password learns nothing about whether the address is confirmed.
+    const wrong = await api("POST", "/v1/auth/login", {
+      host,
+      body: { ...credentials, password: "nope-nope" },
+    });
+    expect(wrong.status).toBe(401);
+
+    const { id } = res.body.user as { id: string };
+    await users.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { emailVerifiedAt: new Date() } },
+    );
+    const ok = await api("POST", "/v1/auth/login", { host, body: credentials });
+    expect(ok.status).toBe(200);
     const me = await api("GET", "/v1/auth/me", {
       host,
-      token: String(res.body.token),
+      token: String(ok.body.token),
     });
-    expect(me.status).toBe(200);
-    expect(me.body.user).toEqual(res.body.user);
+    expect(me.body.user).toEqual({
+      ...(res.body.user as object),
+      emailVerified: true,
+    });
   });
 
   test("registration cannot pick a role or a tenant", async () => {
@@ -68,7 +93,7 @@ describe("register and login", () => {
 
   test("login ignores email case; wrong password and unknown email get the same 401", async () => {
     const { host } = await createTenant();
-    await api("POST", "/v1/auth/register", { host, body: ana });
+    await signUp(host, ana);
 
     const ok = await api("POST", "/v1/auth/login", {
       host,
@@ -103,7 +128,7 @@ describe("register and login", () => {
   test("passwords and tokens are stored hashed and never returned", async () => {
     const { tenant, host } = await createTenant();
     const res = await api("POST", "/v1/auth/register", { host, body: ana });
-    const token = String(res.body.token);
+    expect(res.body.token).toBeUndefined();
 
     const doc = await users.findOne({
       tenantId: tenant._id,
@@ -112,8 +137,7 @@ describe("register and login", () => {
     expect(doc?.passwordHash?.startsWith("$argon2id$")).toBe(true);
     expect(JSON.stringify(res.body)).not.toContain("passwordHash");
     expect(JSON.stringify(res.body)).not.toContain(ana.password);
-    expect(await sessions.findOne({ _id: token })).toBeNull();
-    expect(await sessions.countDocuments({ userId: doc?._id })).toBe(1);
+    expect(await sessions.countDocuments({ userId: doc?._id })).toBe(0);
   });
 });
 

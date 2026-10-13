@@ -13,6 +13,7 @@ import {
   nextPhone,
   PASSWORD,
   type Shop,
+  signUp,
 } from "./helpers";
 
 const at = (shop: Shop, days: number, time: string) =>
@@ -26,12 +27,14 @@ describe("one person, several barbershops", () => {
     const a = await createShop();
     const b = await createShop();
     const c = await createShop();
-    const reg = (host: string, password: string) =>
-      api("POST", "/v1/auth/register", { host, body: { ...ana, password } });
-    const inA = await reg(a.host, PASSWORD);
-    expect((await reg(b.host, PASSWORD)).status).toBe(201);
-    expect((await reg(c.host, "another long password")).status).toBe(201);
-    expect((await reg(a.host, PASSWORD)).status).toBe(409);
+    const inA = await signUp(a.host, { ...ana, password: PASSWORD });
+    await signUp(b.host, { ...ana, password: PASSWORD });
+    await signUp(c.host, { ...ana, password: "another long password" });
+    const again = await api("POST", "/v1/auth/register", {
+      host: a.host,
+      body: ana,
+    });
+    expect(again.status).toBe(409);
 
     const login = (host: string, password: string) =>
       api("POST", "/v1/auth/login", {
@@ -43,7 +46,7 @@ describe("one person, several barbershops", () => {
     // A session of one barbershop is worthless in another.
     const me = await api("GET", "/v1/auth/me", {
       host: b.host,
-      token: String(inA.body.token),
+      token: inA.token,
     });
     expect(me.status).toBe(401);
     expect(
@@ -54,11 +57,8 @@ describe("one person, several barbershops", () => {
   test("a guest is never matched to an account by phone or email", async () => {
     const shop = await bookingShop();
     const phone = nextPhone();
-    const signup = await api("POST", "/v1/auth/register", {
-      host: shop.host,
-      body: { ...ana, phone },
-    });
-    const token = String(signup.body.token);
+    const signup = await signUp(shop.host, { ...ana, phone });
+    const token = signup.token;
     // Someone books as a guest with the account holder's phone and email.
     const guestRes = await book(
       shop,
@@ -96,9 +96,7 @@ describe("one person, several barbershops", () => {
     const stored = await appointments.findOne({
       _id: new ObjectId(String(own.body.id)),
     });
-    expect(stored?.customerId.toHexString()).toBe(
-      String(signup.body.user && (signup.body.user as { id: string }).id),
-    );
+    expect(stored?.customerId.toHexString()).toBe(signup.id);
     const login = await api("POST", "/v1/auth/login", {
       host: shop.host,
       body: { email: ana.email, password: PASSWORD },

@@ -15,7 +15,13 @@ import {
 const H = 60 * 60 * 1000;
 const startOf = (shop: Shop, days: number, time: string) =>
   instantIn(shop.timeZone, dayIn(shop.timeZone, days), time);
-const sentTo = (address: string) => outbox.filter((m) => m.to === address);
+// Booking notices also go by email; these tests only count the reminders.
+const sentTo = (address: string) =>
+  outbox.filter(
+    (m) =>
+      (m.to === address && m.subject.includes("ecordatorio")) ||
+      (m.to === address && m.subject.includes("Reminder")),
+  );
 const remindAt = (shop: Shop, start: string, hoursBefore: number) =>
   sendReminders(
     shop.tenant,
