@@ -6,11 +6,15 @@ Cuentas por barbería, inicio de sesión, sesiones, roles y gestión del equipo:
 ## Requirements
 
 ### Requirement: Cuentas por barbería
-Cada cuenta SHALL pertenecer a una sola barbería; el correo es único dentro de la barbería (índice `tenant_login_unique`, solo sobre cuentas con correo) y puede repetirse en otra, con la misma contraseña o con otra. `users` es la única colección de identidad: las cuentas de una misma persona en varias barberías son independientes y el sistema MUST NOT enlazarlas ni fusionarlas mientras el correo no esté verificado. Los clientes que reservan sin registrarse son registros `guest` (ver `booking`) que no pueden iniciar sesión. El registro público MUST crear solo clientes (`customer`). La contraseña MUST tener de 8 a 128 caracteres y guardarse solo como hash argon2id.
+Cada cuenta SHALL pertenecer a una sola barbería; el correo es único dentro de la barbería (índice `tenant_login_unique`, solo sobre cuentas con correo) y puede repetirse en otra, con la misma contraseña o con otra. `users` es la única colección de identidad: las cuentas de una misma persona en varias barberías son independientes y el sistema MUST NOT enlazarlas ni fusionarlas mientras el correo no esté verificado. Los clientes que reservan sin registrarse son registros `guest` (ver `booking`) que no pueden iniciar sesión. El registro público MUST crear solo clientes (`customer`). La contraseña MUST tener de 8 a 128 caracteres y guardarse solo como hash argon2id. El registro MUST llevar `acceptTerms: true` (el cliente acepta el aviso de privacidad y los términos y condiciones); sin eso responde 422 y no crea nada. La cuenta guarda la fecha en `termsAcceptedAt`, que se conserva aunque la cuenta se borre.
 
 #### Scenario: Registro con correo ya usado
 - **WHEN** alguien se registra con un correo que ya existe en esa barbería
 - **THEN** la respuesta es 409 `EMAIL_TAKEN`
+
+#### Scenario: Registro sin aceptar el aviso
+- **WHEN** alguien se registra sin `acceptTerms: true`
+- **THEN** la respuesta es 422 y no se crea la cuenta
 
 #### Scenario: Mismo correo en otra barbería
 - **WHEN** el correo existe en la barbería A y alguien se registra en la barbería B
@@ -44,6 +48,17 @@ Un usuario con sesión SHALL poder cambiar su contraseña enviando la actual. Si
 #### Scenario: Cambio exitoso
 - **WHEN** el usuario cambia su contraseña desde su teléfono
 - **THEN** sigue con sesión en ese teléfono y su sesión de la computadora deja de valer
+
+### Requirement: Borrar la cuenta propia
+Un cliente (`customer`) con sesión SHALL poder borrar su cuenta (`POST /v1/auth/delete-account`) enviando su contraseña; si no coincide, 403 `WRONG_PASSWORD`, con 10 intentos cada 15 minutos. Mientras tenga una cita futura confirmada o esperando pago, o productos apartados, MUST responder 409 `OPEN_BOOKINGS` y no borrar nada. Al borrarla, el registro en `users` se queda con `deletedAt`, `active: false` y el nombre "Cliente eliminado" (en el idioma de la barbería), y pierde correo, teléfono, contraseña, correo de contacto, verificación y `stripeCustomerId`; antes se vacían nombre, correo y teléfono del Customer de Stripe y, si Stripe falla, no se borra nada (502). Se borran sus sesiones, enlaces de correo, suscripciones push, notificaciones y entradas en la lista de espera. Sus citas y apartados pasados se conservan apuntando al registro sin datos, para la contabilidad de la barbería. El personal MUST NOT borrar su propia cuenta (403); el dueño la desactiva.
+
+#### Scenario: Cliente sin pendientes
+- **WHEN** un cliente sin citas futuras borra su cuenta con la contraseña correcta
+- **THEN** su sesión deja de valer, ya no puede iniciar sesión, su correo queda libre para registrarse de nuevo y sus citas pasadas siguen en los reportes
+
+#### Scenario: Cliente con una cita próxima
+- **WHEN** un cliente con una cita confirmada para mañana intenta borrar su cuenta
+- **THEN** recibe 409 `OPEN_BOOKINGS` y su cuenta queda igual
 
 ### Requirement: Verificación de correo
 Registrarse SHALL enviar al correo un enlace de un solo uso que vence en 24 horas; el registro MUST NOT abrir sesión (responde 201 con la cuenta y sin token). Un cliente (`customer`) con el correo sin verificar MUST NOT iniciar sesión: con la contraseña correcta recibe 403 `EMAIL_NOT_VERIFIED` y se le reenvía un enlace nuevo (dentro del límite de 3 por hora); con una incorrecta, el 401 de siempre. El personal creado por el dueño no necesita verificar para entrar. `POST /v1/auth/verify-email` con el token marca `emailVerifiedAt` y `GET /v1/auth/me` devuelve `emailVerified`. Un usuario con sesión puede pedir otro enlace (`POST /v1/auth/verify-email/request`, 3 por hora), y el nuevo MUST retirar el anterior. Solo se guarda el SHA-256 del token en `authTokens`, con TTL. Un enlace usado, vencido, inventado, de otra barbería o de otro propósito responde 400 `INVALID_TOKEN`. El sistema MUST NOT unir cuentas de distintas barberías por correo, ni siquiera verificado, sin una decisión de producto explícita.

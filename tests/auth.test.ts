@@ -8,6 +8,7 @@ const ana = {
   email: "Ana@Example.com ",
   password: "s3cret-pass",
   phone: "+52 (664) 123-4567",
+  acceptTerms: true,
 };
 
 describe("register and login", () => {
@@ -70,6 +71,27 @@ describe("register and login", () => {
       });
       expect(res.status).toBe(422);
     }
+  });
+
+  test("registration requires accepting the terms and records when", async () => {
+    const { tenant, host } = await createTenant();
+    const { acceptTerms: _, ...withoutTerms } = ana;
+    for (const body of [withoutTerms, { ...ana, acceptTerms: false }]) {
+      const res = await api("POST", "/v1/auth/register", { host, body });
+      expect(res.status).toBe(422);
+    }
+
+    const before = new Date();
+    expect(
+      (await api("POST", "/v1/auth/register", { host, body: ana })).status,
+    ).toBe(201);
+    const doc = await users.findOne({
+      tenantId: tenant._id,
+      email: "ana@example.com",
+    });
+    expect(doc?.termsAcceptedAt?.getTime()).toBeGreaterThanOrEqual(
+      before.getTime(),
+    );
   });
 
   test("an email is unique per tenant, not across tenants", async () => {

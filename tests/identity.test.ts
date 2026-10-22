@@ -20,7 +20,12 @@ const at = (shop: Shop, days: number, time: string) =>
   instantIn(shop.timeZone, dayIn(shop.timeZone, days), time);
 const book = (shop: Shop, body: Record<string, unknown>, token?: string) =>
   api("POST", "/v1/public/appointments", { host: shop.host, token, body });
-const ana = { name: "Ana", email: "ana@example.com", password: PASSWORD };
+const ana = {
+  name: "Ana",
+  email: "ana@example.com",
+  password: PASSWORD,
+  acceptTerms: true,
+};
 
 describe("one person, several barbershops", () => {
   test("accounts per barbershop are independent: same email, same or different password", async () => {

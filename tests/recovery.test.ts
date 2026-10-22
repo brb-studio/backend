@@ -20,7 +20,13 @@ const email = () => `rec${Date.now()}${seq++}@example.com`;
 const register = (host: string, address: string, extra = {}) =>
   api("POST", "/v1/auth/register", {
     host,
-    body: { name: "Ana", email: address, password: PASSWORD, ...extra },
+    body: {
+      name: "Ana",
+      email: address,
+      password: PASSWORD,
+      acceptTerms: true,
+      ...extra,
+    },
   });
 
 describe("email verification", () => {

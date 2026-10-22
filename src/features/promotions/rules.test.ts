@@ -90,3 +90,14 @@ describe("evaluate", () => {
     });
   });
 });
+
+test("loyalty: every 10th visit gets the reward, counting booked ones", () => {
+  const loyalty = promo({ value: 100, everyVisits: 10 });
+  const at = (customerVisits: number) =>
+    evaluate(loyalty, ctx({ customerVisits }));
+  expect(at(9)).toEqual({ ok: true, amountMinor: 70_000 });
+  expect(at(19)).toEqual({ ok: true, amountMinor: 70_000 });
+  for (const visits of [0, 8, 10, 18]) {
+    expect(at(visits)).toEqual({ ok: false, reason: "not_due" });
+  }
+});

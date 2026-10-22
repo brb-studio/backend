@@ -91,6 +91,17 @@ El cliente de una cita SHALL ser siempre un documento de `users` de la misma bar
 - **WHEN** se intenta guardar otro invitado con el mismo teléfono en la misma barbería
 - **THEN** la base lo rechaza por el índice único `tenant_guest_phone_unique` y la reserva reutiliza el existente
 
+### Requirement: Lista de clientes
+Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1/customers?q=`): cuentas e invitados, nunca cuentas borradas ni personal, a lo más 50, de los más nuevos a los más viejos. Con `q` (hasta 80 caracteres), si solo tiene caracteres de teléfono busca sus dígitos dentro del teléfono; si no, busca el texto sin distinguir mayúsculas en nombre, correo y correo de contacto (los acentos sí cuentan). Cada cliente trae visitas (citas completadas), faltas (`no_show`), lo gastado (suma de `totalMinor` de las completadas), la fecha local de su última visita y de su próxima cita confirmada. Para un manager esos números solo cuentan citas de su sucursal. Barberos y clientes reciben 403.
+
+#### Scenario: Buscar por teléfono
+- **WHEN** el dueño busca "664 222"
+- **THEN** recibe a los clientes cuyo teléfono contiene "664222"
+
+#### Scenario: Manager de una sucursal
+- **WHEN** un manager ve a un cliente que fue una vez a su sucursal y otra a otra sucursal
+- **THEN** ese cliente aparece con 1 visita
+
 ### Requirement: Cancelación por el cliente
 Un cliente con sesión SHALL poder cancelar solo sus propias citas confirmadas, y solo hasta `cancelNoticeMin` minutos antes del inicio; después la respuesta MUST ser 409 `TOO_LATE`. Al cancelar:
 - se devuelve el uso de la promoción;
@@ -116,7 +127,11 @@ Un cliente con sesión SHALL poder mover su propia cita confirmada, con el mismo
 - **THEN** el cambio se acepta aunque el horario nuevo se encime con el anterior
 
 ### Requirement: Agenda del staff
-El staff SHALL listar citas por rango, de máximo 62 días; por defecto, desde 12 horas atrás hasta 7 días adelante. Owner y admin ven todas, el manager las de su sucursal y el barbero solo las suyas.
+El staff SHALL listar citas por rango, de máximo 62 días; por defecto, desde 12 horas atrás hasta 7 días adelante. Con `date` (`YYYY-MM-DD`, sin `from`/`to`) SHALL listar ese día calendario en la zona de cada sucursal, nunca en la del dispositivo ni la del servidor. Owner y admin ven todas, el manager las de su sucursal y el barbero solo las suyas.
+
+#### Scenario: Sucursales en zonas distintas
+- **WHEN** el dueño pide el 10 de noviembre y tiene una cita a las 23:30 en Tijuana y otra a las 00:30 en CDMX, ambas de ese día local
+- **THEN** recibe las dos, y ninguna al pedir el 11
 
 #### Scenario: Barbero consulta la agenda
 - **WHEN** un barbero lista las citas de la semana
@@ -134,11 +149,15 @@ El staff SHALL listar citas por rango, de máximo 62 días; por defecto, desde 1
 - **THEN** recibe `{ "barber": null }`
 
 ### Requirement: Cambios de estado por el staff
-El staff SHALL poder marcar una cita confirmada como `completed` o `no_show`, solo después de su inicio (antes, 409 `NOT_STARTED`), o como `cancelled`, con motivo opcional; cancelar una cita pagada en línea devuelve el pago completo. Un `PATCH` MUST cambiar el estado o reprogramar, no ambos; ambos pueden traer notas. Las citas que no están confirmadas responden 409 `NOT_CONFIRMED`.
+El staff SHALL poder marcar una cita confirmada como `completed` o `no_show`, solo después de su inicio (antes, 409 `NOT_STARTED`), o como `cancelled`, con motivo opcional; cancelar una cita pagada en línea devuelve el pago completo. Al completar una cita con saldo (total menos lo cobrado en línea y no reembolsado), el staff MUST decir cómo se cobró en mostrador (`paidWith`: `cash`, `card` o `transfer`; sin él, 422 `PAYMENT_METHOD_REQUIRED`) y la cita guarda `counter` con ese método, el saldo calculado por el API, quién lo recibió y cuándo. Una cita pagada completa en línea se completa sin `paidWith`. `paidWith` solo va con `completed`. Un `PATCH` MUST cambiar el estado o reprogramar, no ambos; ambos pueden traer notas. Las citas que no están confirmadas responden 409 `NOT_CONFIRMED`.
 
 #### Scenario: Marcar "no vino" antes de la hora
 - **WHEN** el staff marca `no_show` una cita que empieza en una hora
 - **THEN** la respuesta es 409 `NOT_STARTED`
+
+#### Scenario: Cobrar el resto de un anticipo
+- **WHEN** el staff completa con `paidWith: card` un corte de 300.00 con 100.00 de anticipo pagado en línea
+- **THEN** la cita queda `completed` con `counter` de 200.00 con tarjeta
 
 #### Scenario: Estado y reprogramación juntos
 - **WHEN** un `PATCH` trae `status` y `startAt`

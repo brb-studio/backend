@@ -8,10 +8,17 @@ import {
 } from "../../db/scoped";
 import { mapBy } from "../../shared/cursor";
 import { localDate } from "../../shared/time";
+import { paidBefore } from "../booking/counter";
+import { type CounterMethod, productMethod } from "../cash/rules";
 import { resolveCommission } from "./commission";
 import { hex } from "./queries";
 
 const DAY = 864e5;
+const inMinorKey = {
+  cash: "cashMinor",
+  card: "cardMinor",
+  transfer: "transferMinor",
+} as const;
 const dayMs = (value: string) => Date.parse(`${value}T00:00:00Z`);
 
 type Cut = Pick<
@@ -23,10 +30,12 @@ type Cut = Pick<
   | "timeZone"
   | "totalMinor"
   | "commission"
+  | "payment"
+  | "counter"
 >;
 
 type Sale = Pick<ProductOrderDoc, "branchId" | "totalMinor"> & {
-  payment?: Pick<NonNullable<ProductOrderDoc["payment"]>, "at">;
+  payment?: Pick<NonNullable<ProductOrderDoc["payment"]>, "at" | "method">;
 };
 
 /**
@@ -56,6 +65,16 @@ export async function revenue(
     return true;
   };
   const totals = { servicesMinor: 0, productsMinor: 0, commissionMinor: 0 };
+  const collected = {
+    onlineMinor: 0,
+    cashMinor: 0,
+    cardMinor: 0,
+    transferMinor: 0,
+    unrecordedMinor: 0,
+  };
+  const atCounter = (method: CounterMethod, amountMinor: number) => {
+    collected[inMinorKey[method]] += amountMinor;
+  };
   let cuts = 0;
 
   const rates = await mapBy(
@@ -76,6 +95,8 @@ export async function revenue(
       timeZone: 1,
       totalMinor: 1,
       commission: 1,
+      payment: 1,
+      counter: 1,
     });
   for await (const a of appointments) {
     if (!inRange(localDate(a.startAt, a.timeZone), a.totalMinor)) continue;
@@ -83,6 +104,11 @@ export async function revenue(
     totals.servicesMinor += a.totalMinor;
     totals.commissionMinor +=
       resolveCommission(a, rates.get(hex(a.barberId)))?.amountMinor ?? 0;
+    const online = Math.min(a.totalMinor, paidBefore(a.payment));
+    const counter = a.counter?.amountMinor ?? 0;
+    collected.onlineMinor += online;
+    if (a.counter) atCounter(a.counter.method, counter);
+    collected.unrecordedMinor += Math.max(0, a.totalMinor - online - counter);
   }
 
   const zones = await mapBy(
@@ -99,11 +125,18 @@ export async function revenue(
       currency: tenant.currency,
       "payment.at": near,
     })
-    .project<Sale>({ _id: 0, branchId: 1, totalMinor: 1, "payment.at": 1 });
+    .project<Sale>({
+      _id: 0,
+      branchId: 1,
+      totalMinor: 1,
+      "payment.at": 1,
+      "payment.method": 1,
+    });
   for await (const o of orders) {
     const zone = zones.get(hex(o.branchId)) ?? "UTC";
     if (o.payment && inRange(localDate(o.payment.at, zone), o.totalMinor)) {
       totals.productsMinor += o.totalMinor;
+      atCounter(productMethod(o.payment.method), o.totalMinor);
     }
   }
 
@@ -111,6 +144,7 @@ export async function revenue(
     currency: tenant.currency,
     cuts,
     ...totals,
+    collected,
     days: [...days].map(([date, totalMinor]) => ({ date, totalMinor })),
   };
 }

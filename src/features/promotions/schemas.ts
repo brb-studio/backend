@@ -25,6 +25,7 @@ const fields = {
   packageIds: ids,
   minSubtotalMinor: z.int().min(0).max(100_000_000),
   firstVisitOnly: z.boolean(),
+  everyVisits: z.int().min(2).max(100),
   maxRedemptions: z.int().min(1).max(10_000_000),
   maxPerCustomer: z.int().min(1).max(1000),
 };
@@ -40,6 +41,7 @@ export const promotionCreate = z
     packageIds: fields.packageIds.default([]),
     minSubtotalMinor: fields.minSubtotalMinor.optional(),
     firstVisitOnly: fields.firstVisitOnly.default(false),
+    everyVisits: fields.everyVisits.optional(),
     maxRedemptions: fields.maxRedemptions.optional(),
     maxPerCustomer: fields.maxPerCustomer.optional(),
   })
@@ -50,11 +52,16 @@ export const promotionCreate = z
   .refine((p) => !p.startsAt || !p.endsAt || p.startsAt < p.endsAt, {
     path: ["endsAt"],
     error: "must be after startsAt",
+  })
+  .refine((p) => !(p.firstVisitOnly && p.everyVisits), {
+    path: ["everyVisits"],
+    error: "a first-visit promotion can't repeat every N visits",
   });
 
 export const promotionUpdate = z
   .strictObject({
     ...z.object(fields).partial().shape,
+    everyVisits: fields.everyVisits.nullable().optional(),
     active: z.boolean().optional(),
   })
   .refine((input) => Object.keys(input).length > 0, {

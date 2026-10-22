@@ -129,8 +129,8 @@ export async function forgotPassword(
   link: Link,
 ) {
   const [byIp, byEmail] = [
-    await hit(`forgot-ip:${tenant._id}:${ip}`, 20, 15 * 60 * 1000),
-    await hit(`forgot:${tenant._id}:${email}`, 20, HOUR_MS),
+    await hit(`forgot-ip:${tenant._id}:${ip}`, 10, 15 * 60 * 1000),
+    await hit(`forgot:${tenant._id}:${email}`, 3, HOUR_MS),
   ];
   if (!byIp || !byEmail) throw tooMany();
   const user = await forTenant(tenant._id).users.findOne({

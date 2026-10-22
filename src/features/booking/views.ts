@@ -9,6 +9,7 @@ import type {
 import { mapBy } from "../../shared/cursor";
 import { instantToLocal } from "../../shared/time";
 import { customerRefundable } from "../payments/rules";
+import { dueAtCounter, paidBefore } from "./counter";
 
 /** What an appointment view shows of its branch and barber (and the cancel notice customers get). */
 type ViewBranch = WithId<Pick<BranchDoc, "slug" | "name" | "booking">>;
@@ -92,17 +93,12 @@ function baseView(
   };
 }
 
-/** Payment states where the money is with the barbershop (minus refunds). */
-const COLLECTED = new Set(["paid", "disputed", "refunded"]);
-
 /** The "ticket": how much was paid, how, and what is left to pay at the barbershop. */
 function ticketOf(
   a: AppointmentDoc,
   payment: NonNullable<AppointmentDoc["payment"]>,
 ) {
-  const paidMinor = COLLECTED.has(payment.status)
-    ? payment.amountMinor - (payment.refundedMinor ?? 0)
-    : 0;
+  const paidMinor = paidBefore(payment);
   return {
     provider: payment.provider,
     method: payment.method ?? (payment.provider === "spei" ? "spei" : "card"),
@@ -169,6 +165,14 @@ export async function staffViews(t: TenantDb, list: AppointmentDoc[]) {
         phone: customer.phone,
         email: customer.email ?? customer.contactEmail,
       },
+      ...(a.status === "confirmed" && { dueMinor: dueAtCounter(a) }),
+      ...(a.counter && {
+        counter: {
+          method: a.counter.method,
+          amountMinor: a.counter.amountMinor,
+          at: a.counter.at,
+        },
+      }),
       source: a.source,
       cancelledAt: a.cancelledAt,
       cancelReason: a.cancelReason,

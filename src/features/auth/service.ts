@@ -82,6 +82,7 @@ export async function register(
     role: "customer",
     active: true,
     passwordHash: await Bun.password.hash(input.password),
+    termsAcceptedAt: now,
     createdAt: now,
     updatedAt: now,
   };

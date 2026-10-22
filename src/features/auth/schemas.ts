@@ -20,6 +20,7 @@ export const registerSchema = z.strictObject({
     .transform((phone) => phone.replace(/[ ()-]/g, "") || undefined)
     .optional(),
   password,
+  acceptTerms: z.literal(true),
 });
 
 export const loginSchema = z.strictObject({
@@ -35,6 +36,10 @@ export const resetSchema = z.strictObject({ token, password });
 export const passwordSchema = z.strictObject({
   currentPassword: z.string().min(1).max(128),
   newPassword: password,
+});
+
+export const eraseSchema = z.strictObject({
+  password: z.string().min(1).max(128),
 });
 
 export const STAFF_ROLES = ["admin", "manager", "barber"] as const;

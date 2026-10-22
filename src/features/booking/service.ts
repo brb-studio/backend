@@ -15,6 +15,7 @@ import {
 import { collect } from "../../shared/cursor";
 import { AppError, type Auth, isDuplicate } from "../../shared/http";
 import { photos } from "../../shared/photos";
+import { localToInstant } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
 import { getUser } from "../auth/service";
 import { freeSlots, isBookable, localDate } from "../availability/engine";
@@ -44,9 +45,9 @@ import {
 } from "../payments/holds";
 import { holdEnds, transferFits } from "../payments/rules";
 import { cancelHold, refundAfterCancel, sweepHolds } from "../payments/settle";
-import { resolveCommission } from "../platform/commission";
 import { priceFor, redeem, release } from "../promotions/service";
 import { getBranch } from "../tenancy/service";
+import { closeAppointment, notConfirmed } from "./close";
 import { customerForGuest, findGuest } from "./customers";
 import {
   bookedMinutes,
@@ -68,8 +69,6 @@ const notFound = () => new AppError(404, "NOT_FOUND", "Not found");
 const forbidden = () => new AppError(403, "FORBIDDEN", "Not allowed");
 const slotTaken = () =>
   new AppError(409, "SLOT_TAKEN", "That time is no longer free");
-const notConfirmed = () =>
-  new AppError(409, "NOT_CONFIRMED", "Only confirmed appointments can change");
 const tooMany = () =>
   new AppError(429, "RATE_LIMITED", "Too many attempts, try again later");
 
@@ -727,9 +726,13 @@ export async function listAppointments(
   const t = forTenant(auth.tenantId);
   const from = range.from ?? new Date(Date.now() - 12 * HOUR_MS);
   const to = range.to ?? new Date(from.getTime() + 7 * 24 * HOUR_MS);
+  const when = range.date
+    ? await localDay(t, range.date)
+    : { startAt: { $gte: from, $lt: to } };
+  if (!when) return [];
   const clauses = [
     ...(await visibleTo(auth)),
-    { startAt: { $gte: from, $lt: to } },
+    when,
     ...(range.branchId ? [{ branchId: range.branchId }] : []),
     ...(range.barberId ? [{ barberId: range.barberId }] : []),
   ];
@@ -737,6 +740,25 @@ export async function listAppointments(
     t.appointments.find({ $and: clauses }).sort({ startAt: 1 }).limit(1000),
   );
   return staffViews(t, list);
+}
+
+async function localDay(t: TenantDb, date: string) {
+  const next = Temporal.PlainDate.from(date).add({ days: 1 }).toString();
+  const branches = await collect(
+    t.branches.find({}).project<Pick<BranchDoc, "_id" | "timeZone">>({
+      timeZone: 1,
+    }),
+  );
+  if (branches.length === 0) return null;
+  return {
+    $or: branches.map((b) => ({
+      branchId: b._id,
+      startAt: {
+        $gte: localToInstant(`${date}T00:00`, b.timeZone),
+        $lt: localToInstant(`${next}T00:00`, b.timeZone),
+      },
+    })),
+  };
 }
 
 async function findVisible(auth: Auth, id: ObjectId) {
@@ -888,34 +910,7 @@ export async function updateAppointment(
   if (input.status === "cancelled") {
     await cancel(tenant, appointment, auth.userId, input.cancelReason, "staff");
   } else if (input.status) {
-    if (appointment.startAt.getTime() > Date.now()) {
-      throw new AppError(409, "NOT_STARTED", "It hasn't started yet");
-    }
-    // Completing freezes the barber's commission, so a later rate change can't rewrite what was earned.
-    const barber =
-      input.status === "completed"
-        ? await t.barbers.findOne({ _id: appointment.barberId })
-        : null;
-    const commission = resolveCommission(
-      { ...appointment, status: input.status },
-      barber?.commissionBps,
-    );
-    const result = await t.appointments.updateOne(
-      { _id: id, status: "confirmed" },
-      {
-        $set: {
-          status: input.status,
-          ...(commission && {
-            commission: {
-              bps: commission.bps,
-              amountMinor: commission.amountMinor,
-            },
-          }),
-          updatedAt: new Date(),
-        },
-      },
-    );
-    if (result.modifiedCount === 0) throw notConfirmed();
+    await closeAppointment(auth, appointment, input.status, input.paidWith);
   } else if (input.startAt || input.barberId) {
     await reschedule(tenant, auth, appointment, input);
   }

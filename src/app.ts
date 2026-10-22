@@ -22,11 +22,13 @@ import {
   meRoutes,
   publicBookingRoutes,
 } from "./features/booking/routes";
+import { cashRoutes } from "./features/cash/routes";
 import {
   packageRoutes,
   publicCatalogRoutes,
   serviceRoutes,
 } from "./features/catalog/routes";
+import { customerRoutes } from "./features/customers/routes";
 import { imageRoutes, publicImageRoutes } from "./features/images/routes";
 import { notificationRoutes } from "./features/notifications/routes";
 import {
@@ -43,7 +45,7 @@ import {
   productRoutes,
   publicProductRoutes,
 } from "./features/products/routes";
-import { promotionRoutes } from "./features/promotions/routes";
+import { myLoyaltyRoutes, promotionRoutes } from "./features/promotions/routes";
 import {
   branchRoutes,
   publicRoutes,
@@ -136,6 +138,7 @@ export const app = new Hono<Env>()
   .route("/v1/payments", paymentStaffRoutes)
   .route("/v1/me", meRoutes)
   .route("/v1/me/waitlist", waitlistRoutes)
+  .route("/v1/me/loyalty", myLoyaltyRoutes)
   .route("/v1/me/product-orders", myProductOrderRoutes)
   .route("/v1/public/products", publicProductRoutes)
   .route("/v1/products", productRoutes)
@@ -150,6 +153,8 @@ export const app = new Hono<Env>()
   .route("/v1/packages", packageRoutes)
   .route("/v1/availability", staffAvailabilityRoutes)
   .route("/v1/appointments", appointmentRoutes)
+  .route("/v1/customers", customerRoutes)
+  .route("/v1/cash", cashRoutes)
   .route("/v1/earnings", earningsRoutes)
   .route("/v1/promotions", promotionRoutes)
   .route("/v1/notifications", notificationRoutes)

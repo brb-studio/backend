@@ -50,11 +50,12 @@ Hono (app.ts) → resolveTenant + authenticate (/v1/*)
 
 | Carpeta | Responsabilidad | Piezas puras |
 |---|---|---|
-| `auth/` | cuentas por tenant, sesiones, roles, staff (`users.ts`, `policy.ts`) | `policy.ts` |
+| `auth/` | cuentas por tenant, sesiones, roles, staff (`users.ts`, `policy.ts`), borrado de cuenta del cliente (`erase.ts`) | `policy.ts` |
 | `tenancy/` | tenant por host, branding, branches, límites de plan (`subscription.ts`) | `subscription.ts` |
 | `barbers/` | perfiles barbero, horario semanal, servicios que hace, `time-off.ts` | — (validación en schemas/service) |
 | `catalog/` | servicios, paquetes, catálogo público | `rules.ts` (`offers`: quién puede hacer qué) |
 | `availability/` | slots libres | `engine.ts` (pura, convierte zona 1 vez por ventana) |
+| `customers/` | lista de clientes del panel con visitas, faltas, gasto, última y próxima cita | `rules.ts` (`customerFilter`, `addVisit`) |
 | `booking/` | citas, clientes invitados (`customers.ts`: registros `guest` en `users`), snapshots (`order.ts`), cancel/reschedule | `order.ts` |
 | `promotions/` | promos + pricing + redenciones | `rules.ts` (`priceFor`: lo cotizado = lo cobrado) |
 | `notifications/` | notificaciones in-app, SSE, push subscriptions | — |

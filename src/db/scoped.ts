@@ -17,6 +17,7 @@ export {
   APPOINTMENT_PAYMENT_STATUSES,
   APPOINTMENT_STATUSES,
   CONNECT_STATUSES,
+  COUNTER_METHODS,
   LOCALES,
   PAYMENT_KINDS,
   PAYMENT_METHODS,
@@ -67,6 +68,8 @@ function scope<T extends { tenantId: ObjectId }>(
     ) => collection.updateMany(where(filter), update, options),
     deleteOne: (filter: Filter<T>, options?: InSession) =>
       collection.deleteOne(where(filter), options),
+    deleteMany: (filter: Filter<T>, options?: InSession) =>
+      collection.deleteMany(where(filter), options),
   };
 }
 

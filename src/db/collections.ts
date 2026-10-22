@@ -9,6 +9,7 @@ import {
   type PaymentMethod,
   paymentSpecs,
 } from "./payments";
+import { type PromotionSnapshot, promotionSpecs } from "./promotions";
 import type { CollectionSpec } from "./setup";
 import {
   bool,
@@ -23,6 +24,7 @@ import {
 
 export * from "./billing";
 export * from "./payments";
+export * from "./promotions";
 
 export const LOCALES = ["es", "en"] as const;
 export const ROLES = [
@@ -190,6 +192,8 @@ export type UserDoc = {
   role: Role;
   branchId?: ObjectId;
   active: boolean;
+  termsAcceptedAt?: Date;
+  deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -337,15 +341,6 @@ export type AppointmentItem =
       }[];
     };
 
-export type PromotionSnapshot = {
-  promotionId: ObjectId;
-  code?: string;
-  name: Localized;
-  type: "percent" | "fixed";
-  value: number;
-  amountMinor: number;
-};
-
 /** `requires_payment` and `failed` only exist on legacy Stripe Connect payments (before 2026). */
 export const APPOINTMENT_SUMMARY_STATUSES = [
   ...APPOINTMENT_PAYMENT_STATUSES,
@@ -354,6 +349,8 @@ export const APPOINTMENT_SUMMARY_STATUSES = [
 ] as const;
 export type AppointmentPaymentStatus =
   (typeof APPOINTMENT_SUMMARY_STATUSES)[number];
+
+export const COUNTER_METHODS = ["cash", "card", "transfer"] as const;
 
 export type AppointmentDoc = {
   _id: ObjectId;
@@ -397,6 +394,12 @@ export type AppointmentDoc = {
     paidAt?: Date;
   };
   /** Frozen when the appointment is completed (or its commission is paid) so later rate changes can't rewrite history. */
+  counter?: {
+    method: (typeof COUNTER_METHODS)[number];
+    amountMinor: number;
+    receivedBy: ObjectId;
+    at: Date;
+  };
   commission?: { bps: number; amountMinor: number };
   /** The payout that settled this appointment's commission; set together with the payout, never alone. */
   payoutId?: ObjectId;
@@ -410,30 +413,7 @@ export type AppointmentDoc = {
   updatedAt: Date;
 };
 
-export type PromotionDoc = {
-  _id: ObjectId;
-  tenantId: ObjectId;
-  name: Localized;
-  code?: string;
-  type: "percent" | "fixed";
-  value: number;
-  startsAt?: Date;
-  endsAt?: Date;
-  branchIds: ObjectId[];
-  serviceIds: ObjectId[];
-  packageIds: ObjectId[];
-  minSubtotalMinor?: number;
-  firstVisitOnly: boolean;
-  maxRedemptions?: number;
-  maxPerCustomer?: number;
-  redemptions: number;
-  active: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
 export const appointments = db.collection<AppointmentDoc>("appointments");
-export const promotions = db.collection<PromotionDoc>("promotions");
 
 /**
  * `payment.disputed` and `payment.transfer_requested` go to owners and admins: a customer opened a chargeback on an online
@@ -836,6 +816,8 @@ export const specs: CollectionSpec[] = [
             role: oneOf(ROLES),
             branchId: objectId,
             active: bool,
+            termsAcceptedAt: date,
+            deletedAt: date,
             ...timestamps,
           },
         ),
@@ -843,6 +825,10 @@ export const specs: CollectionSpec[] = [
         anyOf: [
           { required: ["email", "passwordHash"] },
           { required: ["guest"], properties: { role: oneOf(["customer"]) } },
+          {
+            required: ["deletedAt"],
+            properties: { role: oneOf(["customer"]) },
+          },
         ],
       },
     },
@@ -1157,6 +1143,12 @@ export const specs: CollectionSpec[] = [
             cardLast4: string({ pattern: "^\\d{4}$" }),
             paidAt: date,
           }),
+          counter: object(["method", "amountMinor", "receivedBy", "at"], {
+            method: oneOf(COUNTER_METHODS),
+            amountMinor: int(1, 100_000_000),
+            receivedBy: objectId,
+            at: date,
+          }),
           commission: object(["bps", "amountMinor"], {
             bps: int(0, 10_000),
             amountMinor: int(0, 100_000_000),
@@ -1218,57 +1210,6 @@ export const specs: CollectionSpec[] = [
     ],
     /** Replaced by `barber_start_live_unique`, which also guards slots held while being paid. */
     dropIndexes: ["barber_start_confirmed_unique"],
-  },
-  {
-    name: "promotions",
-    validator: {
-      $jsonSchema: object(
-        [
-          "tenantId",
-          "name",
-          "type",
-          "value",
-          "branchIds",
-          "serviceIds",
-          "packageIds",
-          "firstVisitOnly",
-          "redemptions",
-          "active",
-          "createdAt",
-          "updatedAt",
-        ],
-        {
-          tenantId: objectId,
-          name: localized,
-          code: string({ pattern: "^[A-Z0-9_-]{3,32}$" }),
-          type: oneOf(["percent", "fixed"]),
-          value: int(1, 10_000_000),
-          startsAt: date,
-          endsAt: date,
-          branchIds: { bsonType: "array", items: objectId },
-          serviceIds: { bsonType: "array", items: objectId },
-          packageIds: { bsonType: "array", items: objectId },
-          minSubtotalMinor: int(0, 100_000_000),
-          firstVisitOnly: bool,
-          maxRedemptions: int(1, 10_000_000),
-          maxPerCustomer: int(1, 1000),
-          redemptions: int(0, 10_000_000),
-          active: bool,
-          ...timestamps,
-        },
-      ),
-      $expr: {
-        $or: [{ $ne: ["$type", "percent"] }, { $lte: ["$value", 100] }],
-      },
-    },
-    indexes: [
-      {
-        key: { tenantId: 1, code: 1 },
-        name: "tenant_code_unique",
-        unique: true,
-        partialFilterExpression: { code: { $type: "string" } },
-      },
-    ],
   },
   {
     name: "notifications",
@@ -1584,4 +1525,5 @@ export const specs: CollectionSpec[] = [
   },
   ...billingSpecs,
   ...paymentSpecs,
+  ...promotionSpecs,
 ];

@@ -30,12 +30,24 @@ Una promoción SHALL aplicar solo si está activa y el momento actual cae entre 
 Una promoción MUST aplicar solo si cumple todas estas condiciones:
 - El subtotal alcanza `minSubtotalMinor`.
 - Con `firstVisitOnly`, el cliente no tiene citas confirmadas ni completadas.
+- Con `everyVisits` (lealtad, de 2 a 100), esta sería su visita número N, 2N, 3N… contando sus citas confirmadas y completadas más esta; si no, el motivo es `not_due`. No se combina con `firstVisitOnly` (422).
 - El cliente no llegó a `maxPerCustomer` usos (cuentan las citas no canceladas).
 - No se agotaron los canjes (`maxRedemptions`).
 
 #### Scenario: Cliente que ya vino
 - **WHEN** un cliente con una cita completada usa una promoción de primera visita
 - **THEN** no se aplica y el motivo es `first_visit`
+
+#### Scenario: Décimo corte
+- **WHEN** un cliente con 9 citas confirmadas o completadas cotiza con una promoción automática de 100 % cada 10 visitas
+- **THEN** el corte sale en 0
+
+### Requirement: Tarjeta de lealtad
+Un cliente con sesión SHALL ver sus programas de lealtad activos (`GET /v1/me/loyalty`): las promociones automáticas vigentes con `everyVisits`, cuántas visitas lleva en la vuelta actual y el premio.
+
+#### Scenario: A mitad de la tarjeta
+- **WHEN** un cliente con 7 visitas consulta un programa de cada 10
+- **THEN** ve 7 de 10
 
 ### Requirement: Motivo cuando un código no aplica
 Cuando un código escrito no aplica, el sistema SHALL informar el motivo: `inactive`, `not_started`, `expired`, `branch`, `item`, `min_subtotal`, `first_visit`, `customer_limit`, `exhausted` o `unknown_code`.

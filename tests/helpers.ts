@@ -245,7 +245,10 @@ export const guestBooking = (
 
 /** Registers through the API, confirms the address the way the emailed link would, then signs in. */
 export async function signUp(host: string, body: Record<string, unknown>) {
-  const res = await api("POST", "/v1/auth/register", { host, body });
+  const res = await api("POST", "/v1/auth/register", {
+    host,
+    body: { acceptTerms: true, ...body },
+  });
   const { id } = res.body.user as { id: string };
   await users.updateOne(
     { _id: new ObjectId(id) },

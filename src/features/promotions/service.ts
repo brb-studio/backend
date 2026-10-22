@@ -117,15 +117,26 @@ export async function updatePromotion(
       { path: "endsAt", message: "must be after startsAt" },
     ]);
   }
+  if (merged.firstVisitOnly && merged.everyVisits) {
+    throw new AppError(422, "VALIDATION", "Invalid request", [
+      {
+        path: "everyVisits",
+        message: "a first-visit promotion can't repeat every N visits",
+      },
+    ]);
+  }
+  const { everyVisits, ...rest } = input;
   const updated = await t.promotions
     .findOneAndUpdate(
       { _id: id },
       {
         $set: {
-          ...input,
+          ...rest,
+          ...(everyVisits && { everyVisits }),
           ...(await checkedRefs(t, input)),
           updatedAt: new Date(),
         },
+        ...(everyVisits === null && { $unset: { everyVisits: "" } }),
       },
       { returnDocument: "after" },
     )
@@ -134,6 +145,49 @@ export async function updatePromotion(
     });
   if (!updated) throw notFound();
   return updated;
+}
+
+export const customerVisits = (
+  t: TenantDb,
+  customerId: ObjectId,
+  session?: ClientSession,
+) =>
+  t.appointments.countDocuments(
+    { customerId, status: { $in: ["confirmed", "completed"] } },
+    { session },
+  );
+
+export async function myLoyalty(auth: Auth, now = new Date()) {
+  const t = forTenant(auth.tenantId);
+  const programs = await collect(
+    t.promotions
+      .find({
+        active: true,
+        everyVisits: { $exists: true },
+        code: { $exists: false },
+      })
+      .limit(10),
+  );
+  const visits = await customerVisits(t, auth.userId);
+  return programs
+    .filter(
+      (p) =>
+        (!p.startsAt || p.startsAt <= now) && (!p.endsAt || now < p.endsAt),
+    )
+    .flatMap((p) =>
+      p.everyVisits
+        ? [
+            {
+              id: p._id.toHexString(),
+              name: p.name,
+              type: p.type,
+              value: p.value,
+              everyVisits: p.everyVisits,
+              visits: visits % p.everyVisits,
+            },
+          ]
+        : [],
+    );
 }
 
 export type Price = {
@@ -175,13 +229,7 @@ export async function priceFor(
     return { ...full, rejected: "unknown_code" };
   }
   const visits = input.customerId
-    ? await t.appointments.countDocuments(
-        {
-          customerId: input.customerId,
-          status: { $in: ["confirmed", "completed"] },
-        },
-        { session },
-      )
+    ? await customerVisits(t, input.customerId, session)
     : 0;
   const { customerId } = input;
   const uses = customerId
@@ -284,6 +332,7 @@ export const toPromotion = (p: PromotionDoc) => ({
   packageIds: p.packageIds.map((id) => id.toHexString()),
   minSubtotalMinor: p.minSubtotalMinor,
   firstVisitOnly: p.firstVisitOnly,
+  everyVisits: p.everyVisits,
   maxRedemptions: p.maxRedemptions,
   maxPerCustomer: p.maxPerCustomer,
   redemptions: p.redemptions,

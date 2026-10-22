@@ -139,6 +139,7 @@ function builders(tenantId: ObjectId) {
         role,
         active: true,
         passwordHash,
+        emailVerifiedAt: now,
         ...stamp,
         ...(barber || branch
           ? { branchId: (barber?.branchId ?? branch?._id) as ObjectId }

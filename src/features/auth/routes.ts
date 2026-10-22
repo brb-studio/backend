@@ -11,6 +11,7 @@ import {
   tenantOrigin,
 } from "../../shared/http";
 import { requireActiveSubscription } from "../tenancy/subscription";
+import { deleteAccount } from "./erase";
 import { STAFF } from "./policy";
 import {
   forgotPassword,
@@ -21,6 +22,7 @@ import {
   verifyEmail,
 } from "./recovery";
 import {
+  eraseSchema,
   forgotSchema,
   localeSchema,
   loginSchema,
@@ -91,7 +93,11 @@ const session = (r: {
 
 export const authRoutes = new Hono<Env>()
   .post("/register", async (c) => {
-    const { locale, ...input } = await readJson(c, registerSchema);
+    const {
+      locale,
+      acceptTerms: _,
+      ...input
+    } = await readJson(c, registerSchema);
     const result = await register(c.var.tenant._id, input);
     // There is no session until the emailed link is followed, so a made-up address gets nowhere.
     sendVerification(c.var.tenant, result.user, linkOf(c, locale)).catch(
@@ -119,6 +125,11 @@ export const authRoutes = new Hono<Env>()
       currentPassword,
       newPassword,
     );
+    return c.body(null, 204);
+  })
+  .post("/delete-account", requireRole("customer"), async (c) => {
+    const { password } = await readJson(c, eraseSchema);
+    await deleteAccount(authOf(c), password, c.var.tenant.defaultLocale);
     return c.body(null, 204);
   })
   .post("/verify-email/request", requireRole(...ANYONE), async (c) => {

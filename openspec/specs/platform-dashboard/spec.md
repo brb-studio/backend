@@ -45,7 +45,7 @@ El detalle de un corte SHALL mostrar cliente, servicios, descuento, precio cobra
 - **THEN** ve el porcentaje congelado en la cita, el importe y el pago al barbero con su fecha y referencia
 
 ### Requirement: Ganancias de la propia barbería
-El owner y el admin SHALL ver lo que entró a su barbería en un rango de días locales (máximo 366): cortes completados (`servicesMinor` y su número `cuts`), productos entregados (`productsMinor`, por el día de su cobro en la zona de su sucursal) y la comisión de los barberos sobre esos cortes (`commissionMinor`, con las mismas reglas que "Comisión sin porcentajes inventados"), más el total bruto de cada día del rango (días sin ventas en 0). La barbería sale siempre de la sesión y solo se suman importes en su moneda. Cortes cancelados, citas por pagar y apartados sin entregar MUST NOT sumar.
+El owner y el admin SHALL ver lo que entró a su barbería en un rango de días locales (máximo 366): cortes completados (`servicesMinor` y su número `cuts`), productos entregados (`productsMinor`, por el día de su cobro en la zona de su sucursal) y la comisión de los barberos sobre esos cortes (`commissionMinor`, con las mismas reglas que "Comisión sin porcentajes inventados"), cómo entró (`collected`: lo cobrado en línea, en mostrador en efectivo, tarjeta o transferencia, con los productos en efectivo o SPEI, y `unrecordedMinor` para cortes completados sin cobro registrado), más el total bruto de cada día del rango (días sin ventas en 0). La barbería sale siempre de la sesión y solo se suman importes en su moneda. Cortes cancelados, citas por pagar y apartados sin entregar MUST NOT sumar.
 
 #### Scenario: Día con un corte y un producto
 - **WHEN** hoy se completa un corte de 300.00 de un barbero al 25 % y se entrega un producto de 180.00, y además hay un corte cancelado y un apartado sin recoger
@@ -54,3 +54,10 @@ El owner y el admin SHALL ver lo que entró a su barbería en un rango de días 
 #### Scenario: Otra barbería
 - **WHEN** el owner de otra barbería pide el resumen del mismo día
 - **THEN** no ve nada de lo anterior
+
+### Requirement: Corte de caja
+Owner, admin y manager SHALL ver la caja de un día local (`GET /v1/cash?date=&branchId=`): lo cobrado en mostrador por método (efectivo, tarjeta, transferencia), por persona que lo recibió y cada movimiento con su hora en la zona de su sucursal. Cuentan los cortes por la hora de su cobro en mostrador (aunque se completen hasta 7 días después de la cita) y los apartados entregados por la hora de su cobro (SPEI cuenta como transferencia). También SHALL decir cuántos cortes completados ese día tienen saldo sin cobro registrado. El manager solo ve su sucursal (otra, 404); owner y admin todas o una. Barberos y clientes reciben 403.
+
+#### Scenario: Cierre del día
+- **WHEN** hoy se cobraron 300.00 en efectivo, 200.00 con tarjeta y se entregó un producto de 180.00 por SPEI
+- **THEN** la caja de hoy da efectivo 30000, tarjeta 20000 y transferencia 18000, con lo de cada persona

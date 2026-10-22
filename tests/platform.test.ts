@@ -316,7 +316,7 @@ describe("platform finances", () => {
     );
     const done = await api("PATCH", `/v1/appointments/${past._id}`, {
       ...shop.asOwner,
-      body: { status: "completed" },
+      body: { status: "completed", paidWith: "cash" },
     });
     expect(done.status).toBe(200);
     await barbers.updateOne(
@@ -565,6 +565,13 @@ describe("earnings in the barbershop's own admin", () => {
       servicesMinor: 30_000,
       productsMinor: 18_000,
       commissionMinor: 7_500,
+      collected: {
+        onlineMinor: 0,
+        cashMinor: 18_000,
+        cardMinor: 0,
+        transferMinor: 0,
+        unrecordedMinor: 30_000,
+      },
       days: [
         { date: yesterday, totalMinor: 0 },
         { date: day, totalMinor: 48_000 },

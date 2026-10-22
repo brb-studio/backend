@@ -18,6 +18,7 @@ export type Rejection =
   | "item"
   | "min_subtotal"
   | "first_visit"
+  | "not_due"
   | "customer_limit"
   | "exhausted";
 
@@ -48,6 +49,9 @@ export function evaluate(
     return no("min_subtotal");
   }
   if (promo.firstVisitOnly && ctx.customerVisits > 0) return no("first_visit");
+  if (promo.everyVisits && (ctx.customerVisits + 1) % promo.everyVisits !== 0) {
+    return no("not_due");
+  }
   if (promo.maxPerCustomer && ctx.customerUses >= promo.maxPerCustomer) {
     return no("customer_limit");
   }

@@ -1,5 +1,5 @@
 import * as z from "zod";
-import { PAYMENT_KINDS } from "../../db/scoped";
+import { COUNTER_METHODS, PAYMENT_KINDS } from "../../db/scoped";
 import { objectId } from "../../shared/http";
 import { email } from "../auth/schemas";
 import { code } from "../promotions/schemas";
@@ -79,6 +79,7 @@ export const staffBooking = z
 export const appointmentUpdate = z
   .strictObject({
     status: z.enum(["completed", "cancelled", "no_show"]).optional(),
+    paidWith: z.enum(COUNTER_METHODS).optional(),
     startAt: instant.optional(),
     barberId: objectId.optional(),
     notes: notes.optional(),
@@ -89,14 +90,22 @@ export const appointmentUpdate = z
   })
   .refine((input) => !input.status || (!input.startAt && !input.barberId), {
     error: "change the status or reschedule, not both",
+  })
+  .refine((input) => !input.paidWith || input.status === "completed", {
+    path: ["paidWith"],
+    error: "only when completing",
   });
 
 export const appointmentRange = z
   .object({
     branchId: objectId.optional(),
     barberId: objectId.optional(),
+    date: z.iso.date().optional(),
     from: instant.optional(),
     to: instant.optional(),
+  })
+  .refine((r) => !r.date || (!r.from && !r.to), {
+    error: "send a date or a from/to range, not both",
   })
   .refine(
     (r) =>

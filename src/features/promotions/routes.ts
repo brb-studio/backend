@@ -7,6 +7,7 @@ import {
   createPromotion,
   getPromotion,
   listPromotions,
+  myLoyalty,
   toPromotion,
   updatePromotion,
 } from "./service";
@@ -30,3 +31,7 @@ export const promotionRoutes = new Hono<Env>()
     const input = await readJson(c, promotionUpdate);
     return c.json(toPromotion(await updatePromotion(authOf(c), id, input)));
   });
+
+export const myLoyaltyRoutes = new Hono<Env>()
+  .use(requireRole("customer"))
+  .get("/", async (c) => c.json(await myLoyalty(authOf(c))));
