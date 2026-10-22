@@ -43,3 +43,14 @@ El detalle de un corte SHALL mostrar cliente, servicios, descuento, precio cobra
 #### Scenario: Corte con comisión ya pagada
 - **WHEN** el staff abre un corte completado cuya comisión se liquidó
 - **THEN** ve el porcentaje congelado en la cita, el importe y el pago al barbero con su fecha y referencia
+
+### Requirement: Ganancias de la propia barbería
+El owner y el admin SHALL ver lo que entró a su barbería en un rango de días locales (máximo 366): cortes completados (`servicesMinor` y su número `cuts`), productos entregados (`productsMinor`, por el día de su cobro en la zona de su sucursal) y la comisión de los barberos sobre esos cortes (`commissionMinor`, con las mismas reglas que "Comisión sin porcentajes inventados"), más el total bruto de cada día del rango (días sin ventas en 0). La barbería sale siempre de la sesión y solo se suman importes en su moneda. Cortes cancelados, citas por pagar y apartados sin entregar MUST NOT sumar.
+
+#### Scenario: Día con un corte y un producto
+- **WHEN** hoy se completa un corte de 300.00 de un barbero al 25 % y se entrega un producto de 180.00, y además hay un corte cancelado y un apartado sin recoger
+- **THEN** el resumen de hoy da `servicesMinor` 30000, `cuts` 1, `productsMinor` 18000, `commissionMinor` 7500 y el día suma 48000
+
+#### Scenario: Otra barbería
+- **WHEN** el owner de otra barbería pide el resumen del mismo día
+- **THEN** no ve nada de lo anterior

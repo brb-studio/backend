@@ -9,33 +9,13 @@ import {
 } from "../../db/scoped";
 import { collect, mapBy } from "../../shared/cursor";
 import { AppError } from "../../shared/http";
+import { localDate } from "../../shared/time";
 import { resolveCommission } from "./commission";
 import type { Filters } from "./schemas";
 
 const DAY = 864e5;
 const dayMs = (value: string) => Date.parse(`${value}T00:00:00Z`);
 export const hex = (id: ObjectId) => id.toHexString();
-
-const zones = new Map<string, Intl.DateTimeFormat>();
-
-/** The appointment's own calendar day ("2025-03-10") in its branch's time zone. */
-function localDate(at: Date, timeZone: string) {
-  let format = zones.get(timeZone);
-  if (!format) {
-    try {
-      format = new Intl.DateTimeFormat("en-CA", {
-        timeZone,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      });
-    } catch {
-      format = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" });
-    }
-    zones.set(timeZone, format);
-  }
-  return format.format(at);
-}
 
 const scope = (f: Filters): Filter<AppointmentDoc> => ({
   startAt: {

@@ -11,6 +11,13 @@ const MAX_DAYS = 366;
 const day = z.iso.date();
 const dayMs = (value: string) => Date.parse(`${value}T00:00:00Z`);
 
+const inRange = (f: { from: string; to: string }) =>
+  f.from <= f.to && dayMs(f.to) - dayMs(f.from) < MAX_DAYS * 864e5;
+const rangeError = {
+  path: ["to"],
+  error: `to must not precede from, at most ${MAX_DAYS} days apart`,
+};
+
 export const filters = z
   .object({
     from: day,
@@ -20,13 +27,11 @@ export const filters = z
     barberId: objectId.optional(),
     status: z.enum(APPOINTMENT_STATUSES).optional(),
   })
-  .refine(
-    (f) => f.from <= f.to && dayMs(f.to) - dayMs(f.from) < MAX_DAYS * 864e5,
-    {
-      path: ["to"],
-      error: `to must not precede from, at most ${MAX_DAYS} days apart`,
-    },
-  );
+  .refine(inRange, rangeError);
+
+export const range = z
+  .object({ from: day, to: day })
+  .refine(inRange, rangeError);
 
 export type Filters = z.output<typeof filters>;
 

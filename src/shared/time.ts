@@ -23,3 +23,24 @@ export function instantToLocal(at: Date, timeZone: string) {
     .toPlainDateTime()
     .toString({ smallestUnit: "minute" });
 }
+
+const zones = new Map<string, Intl.DateTimeFormat>();
+
+/** An instant's calendar day ("2025-03-10") in its branch's time zone. */
+export function localDate(at: Date, timeZone: string) {
+  let format = zones.get(timeZone);
+  if (!format) {
+    try {
+      format = new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+    } catch {
+      format = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" });
+    }
+    zones.set(timeZone, format);
+  }
+  return format.format(at);
+}

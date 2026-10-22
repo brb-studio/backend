@@ -94,6 +94,7 @@ Every `/v1` request needs the tenant's host in `X-Tenant-Host` or `X-Forwarded-H
 | `GET/POST/PATCH /v1/products` · `GET /v1/public/products` | staff · owner/admin to write · anyone | Optional products module (`products.enabled`; 404 when off): catalog with optional stock |
 | `GET/POST /v1/me/product-orders` · `POST /v1/me/product-orders/:id/cancel` | customer | Set products aside for pickup (no online payment); each open one carries a QR `code` |
 | `GET /v1/product-orders` · `POST /v1/product-orders/scan` · `POST /v1/product-orders/:id/deliver` · `POST /v1/product-orders/:id/cancel` | staff | Pending pickups, scan a customer's QR, hand over recording cash or SPEI (`method`) |
+| `GET /v1/earnings/summary?from=&to=` | owner/admin | What the shop took in over local days (≤366): completed cuts (`servicesMinor`, `cuts`), delivered products (`productsMinor`), barbers' commission on those cuts (`commissionMinor`) and the gross per day (`days`), in the tenant's currency |
 | `GET /v1/notifications/stream` | any account | Server-Sent Events: `ready`, `notification`, `ping` every 15 s |
 | `POST /v1/images` | owner/admin/manager | Raw bytes (JPEG, PNG or WebP, ≤ 1 MB; the type is read from the bytes, SVG refused) → `{ id }`. 500 per tenant, 60 per user per hour. Store `/api/images/<id>` (the frontend's path) in an `image` field |
 | `GET /images/:id` | anyone | Outside `/v1` (no tenant): the photo, `Cache-Control: immutable`. Ids are 128-bit random |

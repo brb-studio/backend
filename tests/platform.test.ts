@@ -6,6 +6,7 @@ import {
   appointments,
   barbers,
   platformStaff,
+  productOrders,
 } from "../src/db/collections";
 import { platformLogin } from "../src/features/platform/auth";
 import { api, bookingShop, createShop, createUser } from "./helpers";
@@ -510,5 +511,84 @@ describe("earnings in the barbershop's own admin", () => {
       (await api("POST", "/v1/earnings/payouts", { ...a.asOwner, body })).body
         .error?.code,
     ).toBe("ALREADY_PAID");
+  });
+  test("the shop's own takings: completed cuts and delivered products by local day, minus commission", async () => {
+    const a = await bookingShop();
+    const tenantId = a.tenant._id;
+    const branchId = new ObjectId(a.branchId);
+    const barber = new ObjectId(a.barbers.mateo);
+    await barbers.updateOne(
+      { _id: barber },
+      { $set: { commissionBps: 2_500 } },
+    );
+    await seedAppointment(tenantId, branchId, barber);
+    // Neither a cancelled cut nor a reservation not yet picked up is money in.
+    await seedAppointment(tenantId, branchId, barber, { status: "cancelled" });
+    const at = new Date(`${day}T17:00:00Z`);
+    const order = (status: "delivered" | "reserved") => ({
+      _id: new ObjectId(),
+      tenantId,
+      branchId,
+      customerId: new ObjectId(),
+      status,
+      items: [
+        {
+          productId: new ObjectId(),
+          name: { es: "Cera" },
+          priceMinor: 18_000,
+          quantity: 1,
+        },
+      ],
+      currency: "MXN",
+      totalMinor: 18_000,
+      expiresAt: new Date(at.getTime() + 7 * 864e5),
+      ...(status === "delivered" && {
+        payment: { method: "cash" as const, receivedBy: barber, at },
+      }),
+      createdAt: at,
+      updatedAt: at,
+    });
+    await productOrders.insertMany([order("delivered"), order("reserved")]);
+    const yesterday = new Date(Date.parse(day) - 864e5)
+      .toISOString()
+      .slice(0, 10);
+
+    const res = await api(
+      "GET",
+      `/v1/earnings/summary?from=${yesterday}&to=${day}`,
+      a.asOwner,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      currency: "MXN",
+      cuts: 1,
+      servicesMinor: 30_000,
+      productsMinor: 18_000,
+      commissionMinor: 7_500,
+      days: [
+        { date: yesterday, totalMinor: 0 },
+        { date: day, totalMinor: 48_000 },
+      ],
+    });
+    // Other shops see none of it, and the range is bounded.
+    const other = await bookingShop();
+    expect(
+      (
+        await api(
+          "GET",
+          `/v1/earnings/summary?from=${day}&to=${day}`,
+          other.asOwner,
+        )
+      ).body.servicesMinor,
+    ).toBe(0);
+    expect(
+      (
+        await api(
+          "GET",
+          `/v1/earnings/summary?from=${day}&to=${yesterday}`,
+          a.asOwner,
+        )
+      ).status,
+    ).toBe(422);
   });
 });
