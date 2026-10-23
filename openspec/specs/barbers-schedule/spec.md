@@ -29,6 +29,12 @@ Los `serviceIds` de un barbero SHALL ser servicios válidos para todas las sucur
 ### Requirement: Cuenta vinculada
 Un perfil SHALL poder vincularse con una cuenta de rol `barber` de la misma sucursal, o con una cuenta `owner` o `admin` de cualquier sucursal (dueño que también corta pelo, que conserva todos sus permisos de dueño); con cualquier otra cuenta la respuesta MUST ser 422 `VALIDATION`. Una cuenta tiene como máximo un perfil (409 `USER_LINKED` si ya tiene uno), y enviar `userId: null` desvincula. La cuenta vinculada recibe los avisos de sus citas.
 
+El owner o admin SHALL poder crear su propio perfil en un paso (`POST /v1/barbers/me`), pensado para barberías de una sola persona: queda vinculado a su cuenta, con su nombre, un slug sacado del nombre (con `-2`, `-3`… si ya existe), todos los servicios activos de la sucursal y el horario de la sucursal. Si la barbería tiene una sola sucursal activa no hace falta decir cuál; con varias, sin `branchId` responde 422. Respeta el límite de barberos del plan (402 `PLAN_LIMIT`). Manager y barber reciben 403.
+
+#### Scenario: Barbería de una persona
+- **WHEN** la dueña de una barbería con una sola sucursal toca "Sí, yo también atiendo"
+- **THEN** queda como barbera con todos los servicios, ve sus cortes en Mi día y los clientes pueden reservar con ella
+
 #### Scenario: Vincular una cuenta ya vinculada
 - **WHEN** se vincula una cuenta que ya tiene perfil de barbero
 - **THEN** la respuesta es 409 `USER_LINKED`

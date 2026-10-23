@@ -25,6 +25,10 @@ export const barberCreate = z.strictObject({
   userId: objectId.optional(),
 });
 
+export const becomeBarberBody = z.strictObject({
+  branchId: objectId.optional(),
+});
+
 export const barberUpdate = z
   .strictObject({
     ...z.object(barberFields).partial().shape,

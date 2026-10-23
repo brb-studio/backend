@@ -11,7 +11,13 @@ import { STAFF } from "../auth/policy";
 import { authOf, requireRole } from "../auth/routes";
 import { slug } from "../tenancy/schemas";
 import { requireActiveSubscription } from "../tenancy/subscription";
-import { barberCreate, barberUpdate, timeOffCreate } from "./schemas";
+import {
+  barberCreate,
+  barberUpdate,
+  becomeBarberBody,
+  timeOffCreate,
+} from "./schemas";
+import { becomeBarber } from "./self";
 import {
   createBarber,
   getBarber,
@@ -35,6 +41,18 @@ export const barberRoutes = new Hono<Env>()
   })
   .get("/:id", async (c) =>
     c.json(toBarber(await getBarber(authOf(c), parseId(c.req.param("id"))))),
+  )
+  .post(
+    "/me",
+    requireRole("owner", "admin"),
+    requireActiveSubscription,
+    async (c) => {
+      const { branchId } = await readJson(c, becomeBarberBody);
+      return c.json(
+        toBarber(await becomeBarber(c.var.tenant, authOf(c), branchId)),
+        201,
+      );
+    },
   )
   .post("/", requireRole(...MANAGERS), requireActiveSubscription, async (c) => {
     const input = await readJson(c, barberCreate);

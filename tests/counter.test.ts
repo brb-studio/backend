@@ -12,6 +12,7 @@ import {
   bookingShop,
   createShop,
   createUser,
+  dayIn,
   type Who,
 } from "./helpers";
 
@@ -23,7 +24,7 @@ async function visit(
   customerId: ObjectId,
   over: Partial<AppointmentDoc> = {},
 ) {
-  const startAt = over.startAt ?? new Date(Date.now() - HOUR);
+  const startAt = over.startAt ?? new Date(Date.now() - 60_000);
   const endAt = new Date(startAt.getTime() + 45 * 60_000);
   const doc: AppointmentDoc = {
     _id: new ObjectId(),
@@ -35,7 +36,7 @@ async function visit(
     startAt,
     endAt,
     blockedUntil: endAt,
-    timeZone: "UTC",
+    timeZone: ZONE,
     items: [
       {
         kind: "service",
@@ -64,7 +65,8 @@ const complete = (who: Who, id: string, paidWith?: string) =>
     body: { status: "completed", ...(paidWith && { paidWith }) },
   });
 
-const today = () => new Date().toISOString().slice(0, 10);
+const ZONE = "America/Tijuana";
+const today = () => dayIn(ZONE, 0);
 
 describe("paying at the counter", () => {
   test("completing asks how the rest was paid and records exactly what was due", async () => {
