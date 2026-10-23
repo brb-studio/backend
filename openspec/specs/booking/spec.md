@@ -92,7 +92,7 @@ El cliente de una cita SHALL ser siempre un documento de `users` de la misma bar
 - **THEN** la base lo rechaza por el índice único `tenant_guest_phone_unique` y la reserva reutiliza el existente
 
 ### Requirement: Lista de clientes
-Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1/customers?q=`): cuentas e invitados, nunca cuentas borradas ni personal, a lo más 50, de los más nuevos a los más viejos. Con `q` (hasta 80 caracteres), si solo tiene caracteres de teléfono busca sus dígitos dentro del teléfono; si no, busca el texto sin distinguir mayúsculas en nombre, correo y correo de contacto (los acentos sí cuentan). Cada cliente trae visitas (citas completadas), faltas (`no_show`), lo gastado (suma de `totalMinor` de las completadas), la fecha local de su última visita y de su próxima cita confirmada. Para un manager esos números solo cuentan citas de su sucursal. Barberos y clientes reciben 403.
+Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1/customers?q=`): cuentas e invitados, nunca cuentas borradas ni personal, a lo más 50, de los más nuevos a los más viejos. Con `q` (hasta 80 caracteres), si solo tiene caracteres de teléfono busca sus dígitos dentro del teléfono; si no, busca el texto sin distinguir mayúsculas en nombre, correo y correo de contacto (los acentos sí cuentan). Cada cliente trae visitas (citas completadas), faltas (`no_show`), lo gastado (suma de `totalMinor` de las completadas), la fecha local de su última visita y de su próxima cita confirmada. Barberos y clientes reciben 403.
 
 #### Scenario: Buscar por teléfono
 - **WHEN** el dueño busca "664 222"
@@ -101,6 +101,17 @@ Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1
 #### Scenario: Manager de una sucursal
 - **WHEN** un manager ve a un cliente que fue una vez a su sucursal y otra a otra sucursal
 - **THEN** ese cliente aparece con 1 visita
+
+### Requirement: Alcance y límite de la lista de clientes
+En la lista de clientes, un manager MUST ver solo a los clientes con al menos una cita (en cualquier estado) en su sucursal, y sus números solo cuentan citas de su sucursal; owner y admin ven a todos. Cada usuario puede listar a lo más 60 veces cada 10 minutos; después la respuesta MUST ser 429 `RATE_LIMITED`.
+
+#### Scenario: Manager no ve clientes de otra sucursal
+- **WHEN** un cliente solo ha reservado en la sucursal B y el manager de la sucursal A lista o busca clientes
+- **THEN** ese cliente no aparece, y el dueño sí lo ve
+
+#### Scenario: Demasiadas búsquedas
+- **WHEN** un usuario pide la lista por 61ª vez en 10 minutos
+- **THEN** la respuesta es 429 `RATE_LIMITED`
 
 ### Requirement: Cancelación por el cliente
 Un cliente con sesión SHALL poder cancelar solo sus propias citas confirmadas, y solo hasta `cancelNoticeMin` minutos antes del inicio; después la respuesta MUST ser 409 `TOO_LATE`. Al cancelar:

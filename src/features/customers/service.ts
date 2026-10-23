@@ -1,12 +1,14 @@
-import type { WithId } from "mongodb";
+import type { ObjectId, WithId } from "mongodb";
+import { hit } from "../../db/rate-limit";
 import {
   type AppointmentDoc,
   forTenant,
+  type TenantDb,
   type TenantDoc,
   type UserDoc,
 } from "../../db/scoped";
 import { collect } from "../../shared/cursor";
-import type { Auth } from "../../shared/http";
+import { AppError, type Auth } from "../../shared/http";
 import { localDate } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
 import {
@@ -18,6 +20,8 @@ import {
 } from "./rules";
 
 const LIMIT = 50;
+const SEARCHES = 60;
+const SEARCH_WINDOW_MS = 10 * 60 * 1000;
 
 type Row = WithId<
   Pick<
@@ -32,10 +36,18 @@ export async function listCustomers(
   q?: string,
   now = new Date(),
 ) {
+  if (!(await hit(`customers:${auth.userId}`, SEARCHES, SEARCH_WINDOW_MS))) {
+    throw new AppError(429, "RATE_LIMITED", "Too many searches, try later");
+  }
   const t = forTenant(auth.tenantId);
+  const branches = visibleBranchIds(auth);
+  const scope = branches && (await customersOf(t, branches));
   const rows = await collect(
     t.users
-      .find(customerFilter(q))
+      .find({
+        ...customerFilter(q),
+        ...(scope && { _id: { $in: scope } }),
+      })
       .sort({ createdAt: -1 })
       .limit(LIMIT)
       .project<Row>({
@@ -48,7 +60,6 @@ export async function listCustomers(
       }),
   );
   const tallies = new Map(rows.map((c) => [c._id.toHexString(), emptyTally()]));
-  const branches = visibleBranchIds(auth);
   const visits = t.appointments
     .find({
       customerId: { $in: rows.map((c) => c._id) },
@@ -69,6 +80,19 @@ export async function listCustomers(
     currency: tenant.currency,
     customers: rows.map((c) => present(c, tallies.get(c._id.toHexString()))),
   };
+}
+
+/** A manager only sees customers who booked at least once in their branches. */
+async function customersOf(t: TenantDb, branches: ObjectId[]) {
+  if (branches.length === 0) return [];
+  const ids = new Map<string, ObjectId>();
+  const booked = t.appointments
+    .find({ branchId: { $in: branches } })
+    .project<Pick<AppointmentDoc, "customerId">>({ _id: 0, customerId: 1 });
+  for await (const { customerId } of booked) {
+    ids.set(customerId.toHexString(), customerId);
+  }
+  return [...ids.values()];
 }
 
 const day = (moment: Tally["last"]) =>

@@ -31,6 +31,8 @@ describe("tenantQuery", () => {
       "a.b.localhost",
       "evil.com/x",
       "[::1]:3000",
+      "www.localhost",
+      "api.localhost:4000",
     ]) {
       expect(tenantQuery(host, "localhost")).toBeNull();
     }

@@ -15,6 +15,7 @@
     "tenant:create": "bun scripts/tenant-create.ts",
     "platform-staff:create": "bun scripts/platform-staff-create.ts",
     "seed": "bun scripts/seed.ts",
+    "seed:showcase": "bun scripts/seed-showcase.ts",
     "vapid:keys": "bun scripts/vapid-keys.ts"
   },
   "trustedDependencies": [],

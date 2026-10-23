@@ -37,6 +37,7 @@ bun run dev        # http://localhost:4000/health
 | `bun run audit` | Fails on high/critical advisories |
 | `bun run tenant:create --slug … --name … --plan trial\|basic\|pro\|lifetime --owner-email … --owner-name …` | Creates a tenant and its owner; prints the owner's generated password once |
 | `bun run seed` | Two demo barbershops (`magicstudio`, `elite`) with staff and customer accounts, all with password `demo1234`; skips a tenant that already exists. `--reset` wipes first, only on `*_test` / `*_e2e` databases. Refuses production. Accounts and URLs: `../frontend/DEMO.md` |
+| `bun run seed:showcase` | Fictional showcase barbershop **Montecobre Barber Co.** (`montecobre.localhost`): 3 branches, 10 barbers, ~4,000 appointments over a year, cash, loyalty, products, payouts. Run with `MONGO_DB=brb-showcase` (also allowed: `brb-showcase_e2e`, `*_test`); refuses production, Vercel, live Stripe keys, non-local MongoDB and databases holding other tenants (unless `--shared`). Idempotent: rerun right before screenshots; `--now 2026-10-23T13:00` (Mexico City time) freezes the clock. Password for every account: `montecobre-demo` |
 | `bun run platform-staff:create --email … --name …` | Creates a global platform staff account (outside any barbershop); prints its generated password once |
 | `bun run vapid:keys` | Prints a VAPID key pair for Web Push (`VAPID_*` in `.env`) |
 
@@ -176,7 +177,7 @@ src/
     billing/    subscription transfers (SPEI to ownerProject), referral codes and rewards (rules.ts is pure)
     payments/   Stripe Connect (connect, checkout, holds, ledger, settle, webhook, stripe/ fetch client) and manual SPEI; rules.ts is pure
   shared/       errors, validation, time (local ↔ instant with Temporal), web-push
-scripts/        tenant-create.ts, seed.ts, vapid-keys.ts
+scripts/        tenant-create.ts, seed.ts, seed-showcase.ts (+ showcase/), vapid-keys.ts
 tests/          integration tests (real MongoDB)
 ```
 

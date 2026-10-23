@@ -21,6 +21,7 @@ import { transfersAvailable } from "../payments/service";
 import {
   type branchCreate,
   type branchUpdate,
+  RESERVED_SLUGS,
   SLUG,
   type tenantUpdate,
 } from "./schemas";
@@ -41,7 +42,7 @@ export function tenantQuery(
   const suffix = `.${platformDomain}`;
   if (!host.endsWith(suffix)) return { customDomain: host };
   const slug = host.slice(0, -suffix.length);
-  return SLUG.test(slug) ? { slug } : null;
+  return SLUG.test(slug) && !RESERVED_SLUGS.has(slug) ? { slug } : null;
 }
 
 export async function tenantForHost(host: string | undefined) {
