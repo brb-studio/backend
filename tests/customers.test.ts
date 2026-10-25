@@ -6,6 +6,7 @@ import {
   type TenantDoc,
   users,
 } from "../src/db/collections";
+import { hit } from "../src/db/rate-limit";
 import { addBranch, api, createShop, createUser, PASSWORD } from "./helpers";
 
 const DAY = 864e5;
@@ -158,6 +159,52 @@ describe("customer list", () => {
         403,
       );
     }
+  });
+});
+
+describe("customer list scoping and rate limit", () => {
+  test("a manager only sees customers who booked at their branch; the owner sees everyone", async () => {
+    const { tenant, host, owner, branchId, asOwner } = await createShop();
+    const otherBranch = await addBranch(host, owner.token);
+    const ana = await createUser(tenant, "customer", { name: "Ana" });
+    const beto = await createUser(tenant, "customer", { name: "Beto" });
+    await guest(tenant, "Carla", "+526643330000");
+    await visit(tenant, branchId, ana.user._id, "completed", -3);
+    await visit(tenant, otherBranch, beto.user._id, "completed", -2);
+    const manager = await createUser(tenant, "manager", {
+      branchId: new ObjectId(branchId),
+    });
+    const asManager = { host, token: manager.token };
+    const names = async (as: typeof asManager, q = "") =>
+      listed(
+        (
+          await api(
+            "GET",
+            `/v1/customers${q && `?q=${encodeURIComponent(q)}`}`,
+            as,
+          )
+        ).body,
+      )
+        .map((c) => c.name)
+        .toSorted();
+
+    expect(await names(asManager)).toEqual(["Ana"]);
+    expect(await names(asManager, "beto")).toEqual([]);
+    expect(await names(asOwner)).toEqual(["Ana", "Beto", "Carla"]);
+  });
+
+  test("too many searches answer 429 RATE_LIMITED", async () => {
+    const { tenant, host } = await createShop();
+    const admin = await createUser(tenant, "admin");
+    for (let i = 0; i < 60; i++) {
+      await hit(`customers:${admin.user._id.toHexString()}`, 60, 600_000);
+    }
+    const res = await api("GET", "/v1/customers?q=ana", {
+      host,
+      token: admin.token,
+    });
+    expect(res.status).toBe(429);
+    expect(res.body.error?.code).toBe("RATE_LIMITED");
   });
 });
 

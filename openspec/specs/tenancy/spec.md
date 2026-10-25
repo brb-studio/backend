@@ -24,6 +24,17 @@ El sistema SHALL identificar el tenant únicamente a partir del host de la petic
 - **WHEN** un cuerpo JSON incluye una clave como `tenantId`
 - **THEN** la respuesta es 422 `VALIDATION` y no se procesa nada
 
+### Requirement: Slugs de barbería reservados
+El slug de una barbería (su subdominio `<slug>.<PLATFORM_DOMAIN>`) MUST NOT ser uno de los reservados para la plataforma: `www`, `app`, `api`, `admin`, `platform`, `site`, `mail`, `status`, `docs`, `help`, `blog`. Crear una barbería con uno de ellos falla la validación (en HTTP, 422 `VALIDATION`), y un host `<reservado>.<PLATFORM_DOMAIN>` nunca resuelve a una barbería. Los slugs de sucursales, servicios y barberos no tienen esta restricción.
+
+#### Scenario: Slug reservado
+- **WHEN** se intenta crear la barbería con slug `www`
+- **THEN** la validación la rechaza con "this slug is reserved" y no se crea nada
+
+#### Scenario: Host del sitio de marketing
+- **WHEN** llega una petición con host `www.<PLATFORM_DOMAIN>`
+- **THEN** no se resuelve ninguna barbería
+
 ### Requirement: Vista pública de la barbería
 El sistema SHALL exponer en `GET /v1/public/tenant`, sin sesión: nombre, moneda, idiomas, idioma por defecto, tema, marca, sucursales activas ordenadas por nombre e indicadores `payments.transfer` (transferencias manuales habilitadas) y `payments.online` (pagos con Stripe; con él, la regla de anticipo y los minutos de apartado). El sistema MUST NOT exponer en esta vista la suscripción, los identificadores de Stripe ni datos internos.
 

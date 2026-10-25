@@ -4,7 +4,7 @@ import * as z from "zod";
 import { client, db } from "../src/db/client";
 import { PLANS, specs, tenants, users } from "../src/db/collections";
 import { ensureCollections } from "../src/db/setup";
-import { slug } from "../src/features/tenancy/schemas";
+import { tenantSlug } from "../src/features/tenancy/schemas";
 import { PLAN_LIMITS } from "../src/features/tenancy/subscription";
 
 const { values } = parseArgs({
@@ -21,7 +21,7 @@ const { values } = parseArgs({
 
 const input = z
   .object({
-    slug,
+    slug: tenantSlug,
     name: z.string().trim().min(1).max(80),
     plan: z.enum(PLANS),
     currency: z.string().regex(/^[A-Z]{3}$/),

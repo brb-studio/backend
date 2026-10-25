@@ -3,6 +3,8 @@ import {
   branchCreate,
   hoursOverlap,
   isTimeZone,
+  RESERVED_SLUGS,
+  tenantSlug,
   tenantUpdate,
 } from "./schemas";
 
@@ -96,5 +98,19 @@ describe("tenantUpdate theme", () => {
     ]) {
       expect(tenantUpdate.safeParse({ theme }).success).toBe(false);
     }
+  });
+});
+
+describe("tenantSlug", () => {
+  test("rejects the platform's reserved subdomains with a validation issue", () => {
+    for (const reserved of RESERVED_SLUGS) {
+      const result = tenantSlug.safeParse(reserved);
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toBe("this slug is reserved");
+    }
+    for (const ok of ["barberia-juan", "www-barber", "apps", "brb-studio"]) {
+      expect(tenantSlug.safeParse(ok).success).toBe(true);
+    }
+    expect(tenantSlug.safeParse("Bad Slug").success).toBe(false);
   });
 });

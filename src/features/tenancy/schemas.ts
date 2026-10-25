@@ -4,6 +4,26 @@ import type { BookingRules, Hours } from "../../db/scoped";
 export const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const slug = z.string().max(64).regex(SLUG);
 
+/** Subdomains of the platform domain kept for the platform itself (marketing site, app, API…). */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  "www",
+  "app",
+  "api",
+  "admin",
+  "platform",
+  "site",
+  "mail",
+  "status",
+  "docs",
+  "help",
+  "blog",
+]);
+
+/** A barbershop's slug: its `<slug>.<PLATFORM_DOMAIN>` subdomain. */
+export const tenantSlug = slug.refine((s) => !RESERVED_SLUGS.has(s), {
+  error: "this slug is reserved",
+});
+
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export function isTimeZone(timeZone: string) {

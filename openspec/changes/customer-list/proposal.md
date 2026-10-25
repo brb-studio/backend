@@ -9,7 +9,7 @@ Cuando un cliente llama o llega, el equipo no tiene dónde ver quién es: cuánt
 - **Cursores planos, sin `aggregate`:** un `find` de clientes limitado a 50 y otro de sus citas por `tenant_customer_start`, sumando en JS (`customers/rules.ts`).
 - **Teléfono por dígitos:** los teléfonos se guardan sin espacios ni guiones, así que una búsqueda solo de caracteres de teléfono compara dígitos.
 - **Regex sin ancla:** recorre los clientes de la barbería; si alguna pasa de ~50 mil, conviene un índice de texto. Los acentos tienen que coincidir.
-- **Manager:** ve a todos los clientes de la barbería, pero sus números solo cuentan su sucursal.
+- **Manager:** ve a todos los clientes de la barbería, pero sus números solo cuentan su sucursal. (Reemplazado por `customer-list-scoping`: el manager solo ve clientes de su sucursal.)
 - **Gasto = cortes completados**, igual que Ganancias; los productos entregados no cuentan.
 - Fuera por ahora: ficha del cliente con su historial, notas, editar datos, paginación.
 
