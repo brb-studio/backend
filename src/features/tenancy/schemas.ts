@@ -1,6 +1,8 @@
 import * as z from "zod";
 import type { BookingRules, Hours } from "../../db/scoped";
 
+/** Mexican tax ID: 12 characters for companies, 13 for people. */
+export const RFC = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}$/;
 export const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const slug = z.string().max(64).regex(SLUG);
 
@@ -167,6 +169,16 @@ export const tenantUpdate = z
       .optional(),
     reminders: z.strictObject({ enabled: z.boolean() }).optional(),
     products: z.strictObject({ enabled: z.boolean() }).optional(),
+    iva: z.strictObject({ enabled: z.boolean() }).optional(),
+    invoicing: z
+      .strictObject({
+        enabled: z.boolean(),
+        rfc: z.string().trim().toUpperCase().regex(RFC),
+        legalName: z.string().trim().min(1).max(200),
+        taxRegime: z.string().regex(/^\d{3}$/),
+        postalCode: z.string().regex(/^\d{5}$/),
+      })
+      .optional(),
     theme: z
       .partialRecord(
         z.enum(THEME_TOKENS),

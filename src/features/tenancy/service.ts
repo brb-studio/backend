@@ -195,6 +195,8 @@ export const toTenant = (tenant: TenantDoc) => ({
   brand: tenant.brand,
   reminders: { enabled: tenant.reminders?.enabled ?? true },
   products: { enabled: tenant.products?.enabled ?? false },
+  iva: { enabled: tenant.iva?.enabled ?? false },
+  invoicing: tenant.invoicing ?? { enabled: false },
   subscription: tenant.subscription,
 });
 

@@ -29,6 +29,7 @@ import {
 import { ownBarberId } from "../barbers/service";
 import { canServe, type Request } from "../catalog/rules";
 import { resolveRequest } from "../catalog/service";
+import { ivaFor } from "../fiscal/rules";
 import {
   notifyBarber,
   notifyCustomer,
@@ -517,9 +518,10 @@ export async function listMine(tenant: TenantDoc, auth: Auth) {
   );
   const { branchOf, barberOf } = await lookups(t, list);
   const now = Date.now();
-  return list.map((a) =>
-    customerView(a, branchOf(a.branchId), barberOf(a.barberId), now),
-  );
+  return list.map((a) => ({
+    ...customerView(a, branchOf(a.branchId), barberOf(a.barberId), now),
+    ...ivaFor(tenant.iva?.enabled, a.totalMinor),
+  }));
 }
 
 /** Past or closed appointments: everything not still upcoming. */
@@ -551,9 +553,15 @@ export async function listMyHistory(
     t.appointments.countDocuments(past),
   ]);
   const { branchOf, barberOf } = await lookups(t, list);
-  const items = list.map((a) =>
-    customerView(a, branchOf(a.branchId), barberOf(a.barberId), now.getTime()),
-  );
+  const items = list.map((a) => ({
+    ...customerView(
+      a,
+      branchOf(a.branchId),
+      barberOf(a.barberId),
+      now.getTime(),
+    ),
+    ...ivaFor(tenant.iva?.enabled, a.totalMinor),
+  }));
   return { total, page, pageSize, items };
 }
 

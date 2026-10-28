@@ -103,6 +103,16 @@ export type TenantDoc = {
   reminders?: { enabled: boolean };
   /** Optional module: products customers set aside and staff hand over. Off unless `enabled`. */
   products?: { enabled: boolean };
+  /** Prices already include IVA (16%): on, receipts show the amount of tax inside each total. Off unless `enabled`. */
+  iva?: { enabled: boolean };
+  /** Optional electronic invoices (CFDI). Off unless `enabled`; the shop issues them in its own system and records the result. */
+  invoicing?: {
+    enabled: boolean;
+    rfc: string;
+    legalName: string;
+    taxRegime: string;
+    postalCode: string;
+  };
   billing?: {
     /** Legacy Stripe subscription ids and cancellation date; nothing reads or writes them anymore. */
     stripeCustomerId?: string;
@@ -563,6 +573,35 @@ export type WaitlistDoc = {
 
 export const waitlist = db.collection<WaitlistDoc>("waitlist");
 
+export const INVOICE_STATUSES = ["requested", "issued", "cancelled"] as const;
+
+/** A customer's request for a CFDI on one completed visit; the shop issues it and records the UUID. */
+export type InvoiceRequestDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  branchId: ObjectId;
+  customerId: ObjectId;
+  appointmentId: ObjectId;
+  status: (typeof INVOICE_STATUSES)[number];
+  amountMinor: number;
+  currency: string;
+  receiver: {
+    rfc: string;
+    legalName: string;
+    taxRegime: string;
+    postalCode: string;
+    cfdiUse: string;
+  };
+  /** Set by the shop once the CFDI is stamped in its own system. */
+  cfdiUuid?: string;
+  issuedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export const invoiceRequests =
+  db.collection<InvoiceRequestDoc>("invoiceRequests");
+
 /** Platform staff work across every barbershop; they live outside any tenant. */
 export type PlatformStaffDoc = {
   _id: ObjectId;
@@ -616,6 +655,9 @@ const opensBeforeCloses = {
     { $map: { input: "$hours", in: { $lt: ["$$this.open", "$$this.close"] } } },
   ],
 };
+
+/** Mexican tax ID: 12 characters for companies, 13 for people. */
+const RFC_PATTERN = "^[A-ZÑ&]{3,4}\\d{6}[A-Z0-9]{3}$";
 
 export const specs: CollectionSpec[] = [
   {
@@ -688,6 +730,17 @@ export const specs: CollectionSpec[] = [
           }),
           reminders: object(["enabled"], { enabled: bool }),
           products: object(["enabled"], { enabled: bool }),
+          iva: object(["enabled"], { enabled: bool }),
+          invoicing: object(
+            ["enabled", "rfc", "legalName", "taxRegime", "postalCode"],
+            {
+              enabled: bool,
+              rfc: string({ pattern: RFC_PATTERN }),
+              legalName: string({ minLength: 1, maxLength: 200 }),
+              taxRegime: string({ pattern: "^\\d{3}$" }),
+              postalCode: string({ pattern: "^\\d{5}$" }),
+            },
+          ),
           billing: {
             bsonType: "object",
             properties: {
@@ -1522,6 +1575,67 @@ export const specs: CollectionSpec[] = [
         key: { appointmentIds: 1 },
         name: "appointment_once",
         unique: true,
+      },
+    ],
+  },
+  {
+    name: "invoiceRequests",
+    validator: {
+      $jsonSchema: object(
+        [
+          "tenantId",
+          "branchId",
+          "customerId",
+          "appointmentId",
+          "status",
+          "amountMinor",
+          "currency",
+          "receiver",
+          "createdAt",
+          "updatedAt",
+        ],
+        {
+          tenantId: objectId,
+          branchId: objectId,
+          customerId: objectId,
+          appointmentId: objectId,
+          status: oneOf(INVOICE_STATUSES),
+          amountMinor: int(0, 100_000_000),
+          currency: string({ pattern: "^[A-Z]{3}$" }),
+          receiver: object(
+            ["rfc", "legalName", "taxRegime", "postalCode", "cfdiUse"],
+            {
+              rfc: string({ pattern: RFC_PATTERN }),
+              legalName: string({ minLength: 1, maxLength: 200 }),
+              taxRegime: string({ pattern: "^\\d{3}$" }),
+              postalCode: string({ pattern: "^\\d{5}$" }),
+              cfdiUse: string({ pattern: "^[A-Z]\\d{2}$" }),
+            },
+          ),
+          cfdiUuid: string({
+            pattern:
+              "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+          }),
+          issuedAt: date,
+          ...timestamps,
+        },
+      ),
+    },
+    indexes: [
+      // One request per visit: a second click can't create a second invoice.
+      {
+        key: { tenantId: 1, appointmentId: 1 },
+        name: "tenant_appointment_unique",
+        unique: true,
+      },
+      // The shop's queue, oldest first; a customer reads their own.
+      {
+        key: { tenantId: 1, status: 1, createdAt: 1 },
+        name: "tenant_status_created",
+      },
+      {
+        key: { tenantId: 1, customerId: 1, createdAt: -1 },
+        name: "tenant_customer_created",
       },
     ],
   },
