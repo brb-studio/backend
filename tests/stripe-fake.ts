@@ -155,6 +155,10 @@ export function fakeStripe() {
     if (method === "POST" && path === "/v1/customers") {
       return json(200, { id: id("cus") });
     }
+    const customer = path.match(/^\/v1\/customers\/(cus_\w+)$/);
+    if (method === "POST" && customer?.[1]) {
+      return json(200, { id: customer[1] });
+    }
     if (method === "POST" && path === "/v1/payment_intents") {
       const form = parseForm(body);
       const allowed = str(sub(form, "allowed_payment_method_types"), "0");

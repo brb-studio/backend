@@ -65,6 +65,7 @@ Every `/v1` request needs the tenant's host in `X-Tenant-Host` or `X-Forwarded-H
 | `POST /v1/auth/login` | anyone | 10 attempts per account per 15 min |
 | `POST /v1/auth/logout` · `GET /v1/auth/me` | signed in | |
 | `POST /v1/auth/password` | signed in | `{ currentPassword, newPassword }`; signs out every other session |
+| `PATCH /v1/auth/me` | customer | `{ name, phone }` corrects the caller's own data (right of rectification); both required, `phone: ""` removes it, same rules as register. With a Stripe customer, Stripe is corrected first (502 and nothing changes if it fails). Email can't be changed here |
 | `POST /v1/auth/delete-account` | customer | `{ password }` erases the caller's account: name replaced, email, phone, password and the Stripe customer's contact data cleared, sessions, push subscriptions, notifications and waiting-list entries deleted. Past appointments keep pointing at the nameless record. 403 `WRONG_PASSWORD`, 409 `OPEN_BOOKINGS` (an upcoming visit or one waiting for payment, or products set aside), 10 attempts per 15 min |
 | `GET /v1/public/barbers?branch=&service=\|package=` | anyone | Active barbers of active branches; with `service`/`package` (slugs), only those who can do it |
 | `GET /v1/public/catalog?branch=` | anyone | `{ currency, services, packages }` that at least one active barber (of that branch) can do |

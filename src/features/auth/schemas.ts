@@ -5,6 +5,11 @@ import { objectId } from "../../shared/http";
 export const email = z.string().trim().toLowerCase().max(254).pipe(z.email());
 export const password = z.string().min(8).max(128);
 const name = z.string().trim().min(2).max(80);
+const phone = z
+  .string()
+  .trim()
+  .regex(/^(\+?[0-9 ()-]{7,20})?$/)
+  .transform((phone) => phone.replace(/[ ()-]/g, "") || undefined);
 
 const locale = z.enum(LOCALES).optional();
 const token = z.string().regex(/^[\w-]{43}$/);
@@ -13,15 +18,12 @@ export const registerSchema = z.strictObject({
   locale,
   name,
   email,
-  phone: z
-    .string()
-    .trim()
-    .regex(/^(\+?[0-9 ()-]{7,20})?$/)
-    .transform((phone) => phone.replace(/[ ()-]/g, "") || undefined)
-    .optional(),
+  phone: phone.optional(),
   password,
   acceptTerms: z.literal(true),
 });
+
+export const profileSchema = z.strictObject({ name, phone });
 
 export const loginSchema = z.strictObject({
   email,

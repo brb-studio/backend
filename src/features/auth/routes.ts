@@ -13,6 +13,7 @@ import {
 import { requireActiveSubscription } from "../tenancy/subscription";
 import { deleteAccount } from "./erase";
 import { STAFF } from "./policy";
+import { updateProfile } from "./profile";
 import {
   forgotPassword,
   type Link,
@@ -27,6 +28,7 @@ import {
   localeSchema,
   loginSchema,
   passwordSchema,
+  profileSchema,
   registerSchema,
   resetSchema,
   staffCreate,
@@ -166,7 +168,11 @@ export const authRoutes = new Hono<Env>()
     );
     return c.body(null, 204);
   })
-  .get("/me", async (c) => c.json({ user: toUser(await getUser(authOf(c))) }));
+  .get("/me", async (c) => c.json({ user: toUser(await getUser(authOf(c))) }))
+  .patch("/me", requireRole("customer"), async (c) => {
+    const input = await readJson(c, profileSchema);
+    return c.json({ user: toUser(await updateProfile(authOf(c), input)) });
+  });
 
 export const userRoutes = new Hono<Env>()
   .use(requireRole("owner", "admin"))

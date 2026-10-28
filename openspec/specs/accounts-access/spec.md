@@ -49,6 +49,17 @@ Un usuario con sesión SHALL poder cambiar su contraseña enviando la actual. Si
 - **WHEN** el usuario cambia su contraseña desde su teléfono
 - **THEN** sigue con sesión en ese teléfono y su sesión de la computadora deja de valer
 
+### Requirement: Corregir los datos propios
+Un cliente (`customer`) con sesión SHALL poder corregir su nombre y su teléfono (`PATCH /v1/auth/me` con `{ name, phone }`, ambos obligatorios; `phone: ""` lo quita), su derecho de rectificación (LFPDPPP). Se validan igual que en el registro (nombre de 2 a 80 caracteres, teléfono sin espacios, paréntesis ni guiones) y cualquier otro campo es 422. Si la cuenta tiene Customer de Stripe, primero se corrigen ahí nombre y teléfono; si Stripe falla, no cambia nada (502). El correo no se cambia aquí. Las citas y la lista de clientes muestran el dato nuevo porque leen la cuenta, no una copia. El personal MUST NOT usar esta ruta (403); sus datos los edita el dueño.
+
+#### Scenario: Cliente corrige su nombre
+- **WHEN** un cliente registrado como "Ana Lopes" envía `{ name: "Ana López", phone: "(664) 222-0000" }`
+- **THEN** su cuenta queda con "Ana López" y `6642220000`, y así aparece en la lista de clientes de la barbería
+
+#### Scenario: Cliente quita su teléfono
+- **WHEN** un cliente envía `phone: ""`
+- **THEN** su cuenta deja de tener teléfono
+
 ### Requirement: Borrar la cuenta propia
 Un cliente (`customer`) con sesión SHALL poder borrar su cuenta (`POST /v1/auth/delete-account`) enviando su contraseña; si no coincide, 403 `WRONG_PASSWORD`, con 10 intentos cada 15 minutos. Mientras tenga una cita futura confirmada o esperando pago, o productos apartados, MUST responder 409 `OPEN_BOOKINGS` y no borrar nada. Al borrarla, el registro en `users` se queda con `deletedAt`, `active: false` y el nombre "Cliente eliminado" (en el idioma de la barbería), y pierde correo, teléfono, contraseña, correo de contacto, verificación y `stripeCustomerId`; antes se vacían nombre, correo y teléfono del Customer de Stripe y, si Stripe falla, no se borra nada (502). Se borran sus sesiones, enlaces de correo, suscripciones push, notificaciones y entradas en la lista de espera. Sus citas y apartados pasados se conservan apuntando al registro sin datos, para la contabilidad de la barbería. El personal MUST NOT borrar su propia cuenta (403); el dueño la desactiva.
 

@@ -8,6 +8,7 @@ import {
 } from "../src/db/collections";
 import { hit } from "../src/db/rate-limit";
 import { addBranch, api, createShop, createUser, PASSWORD } from "./helpers";
+import { fakeStripe } from "./stripe-fake";
 
 const DAY = 864e5;
 
@@ -259,6 +260,63 @@ describe("customer deletes their account", () => {
       body: { name: "Ana López", email, password: PASSWORD, acceptTerms: true },
     });
     expect(again.status).toBe(201);
+  });
+
+  test("corrects their own name and phone, and Stripe's copy first", async () => {
+    const { tenant, host, asOwner } = await createShop();
+    const ana = await createUser(tenant, "customer", {
+      name: "Ana Lopes",
+      phone: "+526641110000",
+    });
+    const me = { host, token: ana.token };
+    const edit = (body: Record<string, unknown>) =>
+      api("PATCH", "/v1/auth/me", { ...me, body });
+
+    const fixed = await edit({ name: "Ana López", phone: "(664) 222-0000" });
+    expect(fixed.status).toBe(200);
+    expect(fixed.body.user).toMatchObject({
+      name: "Ana López",
+      phone: "6642220000",
+    });
+    expect(listed((await api("GET", "/v1/customers", asOwner)).body)).toEqual([
+      expect.objectContaining({ name: "Ana López", phone: "6642220000" }),
+    ]);
+
+    const cleared = await edit({ name: "Ana López", phone: "" });
+    expect(cleared.body.user).not.toHaveProperty("phone");
+    expect((await users.findOne({ _id: ana.user._id }))?.phone).toBeUndefined();
+
+    expect((await edit({ name: "A", phone: "" })).status).toBe(422);
+    expect(
+      (await edit({ name: "Ana", phone: "", email: "x@y.z" })).status,
+    ).toBe(422);
+    const staff = await api("PATCH", "/v1/auth/me", {
+      host,
+      token: asOwner.token,
+      body: { name: "Dueño", phone: "" },
+    });
+    expect(staff.status).toBe(403);
+
+    const stripe = fakeStripe();
+    try {
+      await users.updateOne(
+        { _id: ana.user._id },
+        { $set: { stripeCustomerId: "cus_ana" } },
+      );
+      stripe.state.down = true;
+      expect((await edit({ name: "Ana María", phone: "" })).status).toBe(502);
+      expect((await users.findOne({ _id: ana.user._id }))?.name).toBe(
+        "Ana López",
+      );
+      stripe.state.down = false;
+      expect((await edit({ name: "Ana María", phone: "" })).status).toBe(200);
+      expect(stripe.calls).toContainEqual({
+        method: "POST",
+        path: "/v1/customers/cus_ana",
+      });
+    } finally {
+      stripe.restore();
+    }
   });
 
   test("staff can't erase their own account", async () => {
