@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
-import { productOrders, products } from "../src/db/collections";
+import { productOrders, productStock, products } from "../src/db/collections";
 import { expireOrders } from "../src/features/products/expire";
 import {
   addBranch,
@@ -31,8 +31,8 @@ async function shopWithProducts() {
     slug: "cera",
     name: { es: "Cera" },
     priceMinor: 18_000,
-    stock: 2,
   });
+  await setUnits(shop, wax, 2);
   await create(shop.asOwner, "/v1/products", {
     slug: "aceite",
     name: { es: "Aceite" },
@@ -62,8 +62,32 @@ const mine = async (who: Who) =>
     orders: Order[];
     transfer: { accountKey: string } | null;
   };
-const stockOf = async (slug: string, shop: { tenant: { _id: unknown } }) =>
-  (await products.findOne({ slug, tenantId: shop.tenant._id as never }))?.stock;
+const setUnits = (
+  shop: { asOwner: Who; branchId: string },
+  productId: string,
+  quantity: number | null,
+  branchId = shop.branchId,
+) =>
+  api("PUT", `/v1/products/${productId}/stock/${branchId}`, {
+    ...shop.asOwner,
+    body: { quantity },
+  });
+const stockOf = async (
+  slug: string,
+  shop: { tenant: { _id: unknown }; branchId: string },
+) => {
+  const product = await products.findOne({
+    slug,
+    tenantId: shop.tenant._id as never,
+  });
+  if (!product) return undefined;
+  return (
+    await productStock.findOne({
+      productId: product._id,
+      branchId: new ObjectId(shop.branchId),
+    })
+  )?.quantity;
+};
 
 describe("products module", () => {
   test("with the module off nothing about products exists", async () => {
@@ -125,16 +149,26 @@ describe("products module", () => {
       Object.values(staffList.body) as {
         slug: string;
         id: string;
-        stock?: number;
+        stock: { branchId: string; quantity: number }[];
       }[]
     ).find((p) => p.slug === "cera");
-    expect(wax?.stock).toBe(2);
-    const untracked = await api("PATCH", `/v1/products/${wax?.id}`, {
+    expect(wax?.stock).toEqual([{ branchId: shop.branchId, quantity: 2 }]);
+    const uncounted = await setUnits(shop, wax?.id ?? "", null);
+    expect(uncounted.body).toEqual({ stock: [] });
+    const edited = await api("PATCH", `/v1/products/${wax?.id}`, {
       ...shop.asOwner,
-      body: { stock: null, category: "Cabello" },
+      body: { category: "Cabello" },
     });
-    expect(untracked.body.stock).toBeUndefined();
-    expect(untracked.body.category).toBe("Cabello");
+    expect(edited.body.stock).toEqual([]);
+    expect(edited.body.category).toBe("Cabello");
+    expect(
+      (
+        await api("PATCH", `/v1/products/${wax?.id}`, {
+          ...shop.asOwner,
+          body: { stock: 3 },
+        })
+      ).status,
+    ).toBe(422);
   });
 
   test("reserving takes units atomically; cancelling gives them back", async () => {
@@ -318,5 +352,57 @@ describe("products module", () => {
     });
     const plain = await shopWithProducts();
     expect((await mine(await plain.customer())).transfer).toBeNull();
+  });
+});
+
+describe("stock is counted per branch", () => {
+  test("a product sold at two branches keeps its units apart", async () => {
+    const { shop, customer } = await shopWithProducts();
+    const norte = await addBranch(shop.host, shop.asOwner.token);
+    await api("PATCH", `/v1/branches/${norte}`, {
+      ...shop.asOwner,
+      body: { slug: "norte" },
+    });
+    const cera = String(
+      (
+        await products.findOne({
+          slug: "cera",
+          tenantId: shop.tenant._id as never,
+        })
+      )?._id,
+    );
+    expect((await setUnits(shop, cera, 1, norte)).status).toBe(200);
+    expect(
+      (
+        await api("GET", "/v1/public/products?branch=norte", {
+          host: shop.host,
+        })
+      ).body.products,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ slug: "cera", available: true }),
+      ]),
+    );
+
+    const ana = await customer();
+    const order = (branch: string, quantity: number) =>
+      api("POST", "/v1/me/product-orders", {
+        ...ana,
+        body: { branch, items: [{ product: "cera", quantity }] },
+      });
+    expect((await order("norte", 2)).body.error?.code).toBe("OUT_OF_STOCK");
+    expect((await order("centro", 2)).status).toBe(201);
+    expect((await order("norte", 1)).status).toBe(201);
+    expect(await stockOf("cera", { ...shop, branchId: norte })).toBe(0);
+    expect(await stockOf("cera", shop)).toBe(0);
+
+    const sold = await api("GET", "/v1/public/products?branch=centro", {
+      host: shop.host,
+    });
+    expect(
+      (sold.body.products as { slug: string; available: boolean }[]).find(
+        (p) => p.slug === "cera",
+      )?.available,
+    ).toBe(false);
   });
 });

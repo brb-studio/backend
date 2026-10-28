@@ -502,14 +502,24 @@ export type ProductDoc = {
   image?: string;
   images?: string[];
   category?: string;
-  /** Units left. Absent = not counted (never runs out). */
-  stock?: number;
   position: number;
   active: boolean;
   createdAt: Date;
   updatedAt: Date;
 };
 export const products = db.collection<ProductDoc>("products");
+
+/** Units left of one product at one branch. No row = not counted (never runs out). */
+export type ProductStockDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  productId: ObjectId;
+  branchId: ObjectId;
+  quantity: number;
+  updatedAt: Date;
+};
+
+export const productStock = db.collection<ProductStockDoc>("productStock");
 
 export const PRODUCT_ORDER_STATUSES = [
   "reserved",
@@ -1358,7 +1368,6 @@ export const specs: CollectionSpec[] = [
           image: string(),
           images: { bsonType: "array", maxItems: 12, items: string() },
           category: string({ maxLength: 40 }),
-          stock: int(0, 1_000_000),
           position: int(0, 10_000),
           active: bool,
           ...timestamps,
@@ -1574,6 +1583,29 @@ export const specs: CollectionSpec[] = [
       {
         key: { appointmentIds: 1 },
         name: "appointment_once",
+        unique: true,
+      },
+    ],
+  },
+  {
+    name: "productStock",
+    validator: {
+      $jsonSchema: object(
+        ["tenantId", "productId", "branchId", "quantity", "updatedAt"],
+        {
+          tenantId: objectId,
+          productId: objectId,
+          branchId: objectId,
+          quantity: int(0, 1_000_000),
+          updatedAt: date,
+        },
+      ),
+    },
+    indexes: [
+      // One count per product and branch; the reservation and the restock find it by these.
+      {
+        key: { tenantId: 1, productId: 1, branchId: 1 },
+        name: "tenant_product_branch_unique",
         unique: true,
       },
     ],

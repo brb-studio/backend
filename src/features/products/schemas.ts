@@ -26,14 +26,12 @@ export const productCreate = z.strictObject({
     .regex(/^[a-f\d]{24}$/)
     .optional(),
   category: category.optional(),
-  stock: stock.optional(),
 });
 
 export const productUpdate = z
   .strictObject({
     ...z.object(common).partial().shape,
     category: category.nullable().optional(),
-    stock: stock.nullable().optional(),
     active: z.boolean().optional(),
   })
   .refine((input) => Object.keys(input).length > 0, {
@@ -52,6 +50,9 @@ export const reserveBody = z.strictObject({
     .min(1)
     .max(MAX_LINES),
 });
+
+/** Units left at one branch; null takes the count away, so the product is no longer counted there. */
+export const stockBody = z.strictObject({ quantity: stock.nullable() });
 
 export const scanBody = z.strictObject({ code: z.string().max(100) });
 

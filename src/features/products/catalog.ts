@@ -7,6 +7,7 @@ import { photos } from "../../shared/photos";
 import { visibleBranchIds } from "../auth/policy";
 import { getBranch } from "../tenancy/service";
 import type { productCreate, productUpdate } from "./schemas";
+import type { StockRow } from "./stock";
 
 const ORDER = { position: 1, slug: 1 } as const;
 const notFound = () => new AppError(404, "NOT_FOUND", "Not found");
@@ -55,7 +56,7 @@ export async function updateProduct(
   id: ObjectId,
   input: z.output<typeof productUpdate>,
 ) {
-  const { category, stock, ...rest } = input;
+  const { category, ...rest } = input;
   const updated = await forTenant(auth.tenantId)
     .products.findOneAndUpdate(
       { $and: [{ _id: id }, visibleTo(auth)] },
@@ -63,12 +64,10 @@ export async function updateProduct(
         $set: {
           ...rest,
           ...(category && { category }),
-          ...(stock !== undefined && stock !== null && { stock }),
           updatedAt: new Date(),
         },
         $unset: {
           ...(category === null && { category: "" }),
-          ...(stock === null && { stock: "" }),
           // A saved gallery replaces the single photo of older documents.
           ...(rest.images && { image: "" }),
         },
@@ -98,30 +97,49 @@ export async function publicProducts(tenant: TenantDoc, branchSlug?: string) {
       })
       .sort(ORDER),
   );
+  // With a branch, only its counts matter; without one, a product is available if any branch has units.
+  const counts = await collect(
+    t.productStock.find({
+      productId: { $in: list.map((p) => p._id) },
+      ...(branch && { branchId: branch._id }),
+    }),
+  );
+  const quantities = new Map<string, number[]>();
+  for (const row of counts) {
+    const key = row.productId.toHexString();
+    quantities.set(key, [...(quantities.get(key) ?? []), row.quantity]);
+  }
   return {
     currency: tenant.currency,
-    products: list.map((p) => ({
-      slug: p.slug,
-      name: p.name,
-      description: p.description,
-      priceMinor: p.priceMinor,
-      category: p.category,
-      ...photos(p),
-      available: p.stock === undefined || p.stock > 0,
-    })),
+    products: list.map((p) => {
+      const counted = quantities.get(p._id.toHexString()) ?? [];
+      return {
+        slug: p.slug,
+        name: p.name,
+        description: p.description,
+        priceMinor: p.priceMinor,
+        category: p.category,
+        ...photos(p),
+        available: counted.length === 0 || counted.some((q) => q > 0),
+      };
+    }),
   };
 }
 
-export const toProduct = ({
-  _id,
-  tenantId: _,
-  branchId,
-  createdAt: __,
-  updatedAt: ___,
-  ...product
-}: ProductDoc) => ({
+export const toProduct = (
+  {
+    _id,
+    tenantId: _,
+    branchId,
+    createdAt: __,
+    updatedAt: ___,
+    ...product
+  }: ProductDoc,
+  stock: StockRow[],
+) => ({
   id: _id.toHexString(),
   ...product,
   ...(branchId && { branchId: branchId.toHexString() }),
+  stock,
   ...photos(product),
 });

@@ -90,6 +90,7 @@ export const forTenant = (tenantId: ObjectId) => ({
   waitlist: scope(raw.waitlist, tenantId),
   products: scope(raw.products, tenantId),
   productOrders: scope(raw.productOrders, tenantId),
+  productStock: scope(raw.productStock, tenantId),
   invoiceRequests: scope(raw.invoiceRequests, tenantId),
 });
 

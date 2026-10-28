@@ -1,6 +1,8 @@
 import { MongoClient } from "mongodb";
 
-const client = new MongoClient(process.env.MONGO_URL!);
+const url = process.env.MONGO_URL;
+if (!url) throw new Error("MONGO_URL is required");
+const client = new MongoClient(url);
 await client.db(process.env.MONGO_DB).collection("ownerProject").insertOne({
   email: "dueno@plataforma.test",
   name: "Plataforma Pruebas",

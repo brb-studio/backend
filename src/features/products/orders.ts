@@ -1,4 +1,4 @@
-import { type ClientSession, ObjectId } from "mongodb";
+import { ObjectId } from "mongodb";
 import type * as z from "zod";
 import {
   forTenant,
@@ -11,29 +11,16 @@ import { collect } from "../../shared/cursor";
 import { AppError, type Auth } from "../../shared/http";
 import { expiryFrom, MAX_OPEN, mergeLines, totalOf } from "./rules";
 import type { reserveBody } from "./schemas";
+import { returnStock, takeStock } from "./stock";
 import { orderCode } from "./token";
 
 const notFound = () => new AppError(404, "NOT_FOUND", "Not found");
 const notReserved = () =>
   new AppError(409, "NOT_RESERVED", "This reservation is no longer open");
 
-export async function restock(
-  t: TenantDb,
-  order: Pick<ProductOrderDoc, "items">,
-  session: ClientSession,
-) {
-  for (const item of order.items) {
-    await t.products.updateOne(
-      { _id: item.productId, stock: { $exists: true } },
-      { $inc: { stock: item.quantity } },
-      { session },
-    );
-  }
-}
-
 export async function releaseOrder(
   t: TenantDb,
-  order: Pick<ProductOrderDoc, "_id" | "items">,
+  order: Pick<ProductOrderDoc, "_id" | "branchId" | "items">,
   status: "cancelled" | "expired",
   by?: ObjectId,
 ) {
@@ -52,7 +39,7 @@ export async function releaseOrder(
       { session },
     );
     if (closed.modifiedCount === 0) throw notReserved();
-    await restock(t, order, session);
+    await returnStock(t, order, session);
   });
 }
 
@@ -110,19 +97,15 @@ export async function reserveProducts(
   };
 
   await transaction(async (session) => {
-    for (const item of items) {
-      const product = found.find((p) => p._id.equals(item.productId));
-      if (product?.stock === undefined) continue;
-      const taken = await t.products.updateOne(
-        { _id: item.productId, stock: { $gte: item.quantity } },
-        { $inc: { stock: -item.quantity }, $set: { updatedAt: now } },
-        { session },
+    for (const product of found) {
+      await takeStock(
+        t,
+        product,
+        branch._id,
+        lines.get(product.slug) ?? 1,
+        session,
+        now,
       );
-      if (taken.modifiedCount === 0) {
-        throw new AppError(409, "OUT_OF_STOCK", "Not enough units left", [
-          { path: "items", message: product.slug },
-        ]);
-      }
     }
     await t.productOrders.insertOne(order, { session });
   });

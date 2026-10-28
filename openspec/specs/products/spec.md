@@ -13,17 +13,28 @@ Owner y admin SHALL poder activar o desactivar el módulo con `products.enabled`
 - **THEN** la respuesta es 404
 
 ### Requirement: Catálogo de productos
-Un producto SHALL tener slug único por barbería, nombre en es o en (máximo 80 caracteres), descripción opcional (máximo 500), precio entero en unidades menores de 0 a 10,000,000, categoría opcional (máximo 40), hasta 12 fotos, posición y, opcionalmente, una sucursal (sin ella se vende en todas). Las existencias son opcionales: sin `stock` el producto no se cuenta y nunca se agota. Owner y admin crean y editan; un producto no se borra, se desactiva con `active: false`. Enviar `stock: null` o `category: null` quita el valor. Un slug repetido responde 409 `SLUG_TAKEN`; un barbero o manager que intenta crear responde 403.
+Un producto SHALL tener slug único por barbería, nombre en es o en (máximo 80 caracteres), descripción opcional (máximo 500), precio entero en unidades menores de 0 a 10,000,000, categoría opcional (máximo 40), hasta 12 fotos, posición y, opcionalmente, una sucursal (sin ella se vende en todas). Las existencias no van en el producto: se cuentan por sucursal (ver "Existencias por sucursal"). Owner y admin crean y editan; un producto no se borra, se desactiva con `active: false`. Enviar `category: null` quita la categoría. Un slug repetido responde 409 `SLUG_TAKEN`; un barbero o manager que intenta crear responde 403.
 
-#### Scenario: Dejar de contar existencias
-- **WHEN** el owner envía `{ "stock": null }` a un producto con existencias
-- **THEN** el producto deja de tener `stock` y ya no se agota
+#### Scenario: Stock en el producto rechazado
+- **WHEN** el owner envía `{ "stock": 3 }` al editar un producto
+- **THEN** la respuesta es 422; el stock solo se cambia por sucursal
+
+### Requirement: Existencias por sucursal
+Cada producto SHALL llevar sus existencias por sucursal en `productStock` (una fila por producto y sucursal). Sin fila, el producto no se cuenta en esa sucursal y nunca se agota. `PUT /v1/products/:id/stock/:branchId` con `{ quantity }` fija las unidades (`quantity: null` deja de contarlas); lo pueden cambiar owner, admin y encargado (solo su sucursal). El producto solo se puede contar en una sucursal donde se vende (404 si no). `GET /v1/products` devuelve `stock` como la lista de sucursales contadas, y solo las que el usuario ve. Las existencias de dos sucursales nunca se mezclan: apartar en una no toca la otra.
+
+#### Scenario: Mismo producto en dos sucursales
+- **WHEN** un producto se vende en Centro y Norte, con 2 unidades en Centro y 1 en Norte
+- **THEN** apartar 2 en Norte responde 409 `OUT_OF_STOCK` y apartar 2 en Centro responde 201
+
+#### Scenario: Encargado de otra sucursal
+- **WHEN** un encargado de Norte pide `PUT` de existencias en Centro
+- **THEN** la respuesta es 404
 
 ### Requirement: Catálogo público
 `GET /v1/public/products` SHALL devolver los productos activos (con `?branch=` solo los de esa sucursal y los de todas), ordenados por posición y slug, con `available` pero MUST NOT revelar cuántas unidades quedan.
 
 #### Scenario: Producto agotado
-- **WHEN** un producto con existencias llega a 0
+- **WHEN** un producto llega a 0 en la sucursal consultada (o en todas, si no hay `?branch=`)
 - **THEN** el catálogo público lo muestra con `available: false`
 
 ### Requirement: Apartar productos
@@ -34,7 +45,7 @@ Un cliente con cuenta SHALL poder apartar con `POST /v1/me/product-orders` produ
 - **THEN** el apartado queda `reserved` y el producto queda en 0
 
 ### Requirement: Existencias sin sobreventa
-Con existencias contadas, apartar SHALL descontar las unidades de forma atómica en la misma transacción que crea el apartado; si no alcanzan, la respuesta es 409 `OUT_OF_STOCK` y no cambia nada. Cancelar o vencer un apartado abierto MUST devolver las unidades (solo a productos que siguen contándose); un apartado ya entregado o cerrado no devuelve nada.
+Con existencias contadas en la sucursal del apartado, apartar SHALL descontar las unidades de esa sucursal de forma atómica en la misma transacción que crea el apartado; si no alcanzan, la respuesta es 409 `OUT_OF_STOCK` y no cambia nada. Cancelar o vencer un apartado abierto MUST devolver las unidades a la sucursal donde se apartó (solo a productos que siguen contándose ahí); un apartado ya entregado o cerrado no devuelve nada.
 
 #### Scenario: Dos clientes, una unidad
 - **WHEN** dos clientes apartan la última unidad

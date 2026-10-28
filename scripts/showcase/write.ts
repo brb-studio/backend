@@ -83,6 +83,7 @@ export async function countShowcase() {
     notifications: await n(raw.notifications),
     waitlist: await n(raw.waitlist),
     productOrders: await n(raw.productOrders),
+    productStock: await n(raw.productStock),
     payouts: await n(raw.payouts),
     payments: await n(raw.payments),
     pushSubscriptions: await n(raw.pushSubscriptions),
@@ -186,6 +187,7 @@ export async function seedShowcase(
         await stable(raw.services, catalog.services);
         await stable(raw.packages, catalog.packages);
         await stable(raw.products, catalog.products);
+        await stable(raw.productStock, catalog.productStock);
         await stable(raw.promotions, catalog.promotions);
         await stable(raw.users, people.users);
         await stable(raw.barbers, people.barbers);

@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
+import type { ObjectId } from "mongodb";
 import {
   AppError,
+  type Auth,
   type Env,
   parse,
   parseId,
@@ -31,7 +33,9 @@ import {
   publicQuery,
   reserveBody,
   scanBody,
+  stockBody,
 } from "./schemas";
+import { type StockRow, setStock, stockRows } from "./stock";
 
 const EDITORS = ["owner", "admin"] as const;
 
@@ -41,6 +45,9 @@ const requireProducts = createMiddleware<Env>(async (c, next) => {
   }
   await next();
 });
+
+const stockOf = async (auth: Auth, id: ObjectId): Promise<StockRow[]> =>
+  (await stockRows(auth, [id])).get(id.toHexString()) ?? [];
 
 export const publicProductRoutes = new Hono<Env>()
   .use(requireProducts)
@@ -55,11 +62,22 @@ export const publicProductRoutes = new Hono<Env>()
 
 export const productRoutes = new Hono<Env>()
   .use(requireProducts, requireRole(...STAFF))
-  .get("/", async (c) => c.json((await listProducts(authOf(c))).map(toProduct)))
+  .get("/", async (c) => {
+    const auth = authOf(c);
+    const list = await listProducts(auth);
+    const stock = await stockRows(
+      auth,
+      list.map((p) => p._id),
+    );
+    return c.json(
+      list.map((p) => toProduct(p, stock.get(p._id.toHexString()) ?? [])),
+    );
+  })
   .post("/", requireRole(...EDITORS), requireActiveSubscription, async (c) =>
     c.json(
       toProduct(
         await createProduct(authOf(c), await readJson(c, productCreate)),
+        [],
       ),
       201,
     ),
@@ -68,16 +86,32 @@ export const productRoutes = new Hono<Env>()
     "/:id",
     requireRole(...EDITORS),
     requireActiveSubscription,
-    async (c) =>
-      c.json(
-        toProduct(
-          await updateProduct(
-            authOf(c),
-            parseId(c.req.param("id")),
-            await readJson(c, productUpdate),
-          ),
-        ),
-      ),
+    async (c) => {
+      const auth = authOf(c);
+      const product = await updateProduct(
+        auth,
+        parseId(c.req.param("id")),
+        await readJson(c, productUpdate),
+      );
+      return c.json(toProduct(product, await stockOf(auth, product._id)));
+    },
+  )
+  .put(
+    "/:id/stock/:branchId",
+    requireRole("owner", "admin", "manager"),
+    requireActiveSubscription,
+    async (c) => {
+      const auth = authOf(c);
+      const productId = parseId(c.req.param("id"));
+      const { quantity } = await readJson(c, stockBody);
+      await setStock(
+        auth,
+        productId,
+        parseId(c.req.param("branchId")),
+        quantity,
+      );
+      return c.json({ stock: await stockOf(auth, productId) });
+    },
   );
 
 export const myProductOrderRoutes = new Hono<Env>()

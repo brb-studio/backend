@@ -63,7 +63,7 @@ describe("customer downloads their data (ARCO access)", () => {
   });
 
   test("staff can't download a customer's data", async () => {
-    const { host, asOwner } = await createShop();
+    const { asOwner } = await createShop();
     const res = await api("GET", "/v1/auth/me/export", asOwner);
     expect(res.status).toBe(403);
   });

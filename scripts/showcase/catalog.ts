@@ -1,9 +1,11 @@
+import type { ObjectId } from "mongodb";
 import type {
   BranchDoc,
   Hours,
   Localized,
   PackageDoc,
   ProductDoc,
+  ProductStockDoc,
   PromotionDoc,
   ServiceDoc,
   TenantDoc,
@@ -19,6 +21,7 @@ export type Catalog = {
   services: ServiceDoc[];
   packages: PackageDoc[];
   products: ProductDoc[];
+  productStock: ProductStockDoc[];
   promotions: PromotionDoc[];
 };
 
@@ -277,7 +280,6 @@ const PRODUCTS: [string, number, Localized, string, Partial<ProductDoc>?][] = [
     34_000,
     { es: "Pomada brillo 90 g", en: "Shine pomade 90 g" },
     "Styling",
-    { stock: 0 },
   ],
   [
     "aceite-barba",
@@ -321,7 +323,6 @@ const PRODUCTS: [string, number, Localized, string, Partial<ProductDoc>?][] = [
     129_000,
     { es: "Kit regalo Montecobre", en: "Montecobre gift kit" },
     "Regalo",
-    { stock: 3 },
   ],
 ];
 
@@ -340,9 +341,25 @@ function products(now: Date): ProductDoc[] {
   }));
 }
 
+/** Units left at every branch for the products that are counted; the rest are never sold out. */
+const COUNTED: Record<string, number> = { "pomada-brillo": 0, "kit-regalo": 3 };
+
+function productStock(now: Date, branchIds: ObjectId[]): ProductStockDoc[] {
+  return Object.entries(COUNTED).flatMap(([slug, quantity]) =>
+    branchIds.map((branchId) => ({
+      _id: oid(`stock:${slug}:${branchId.toHexString()}`),
+      tenantId,
+      productId: oid(`product:${slug}`),
+      branchId,
+      quantity,
+      updatedAt: ago(now, 1),
+    })),
+  );
+}
+
 /** Products a customer can actually take home (active and not sold out). */
 export const SELLABLE = PRODUCTS.filter(
-  ([, , , , extra]) => extra?.active !== false && extra?.stock !== 0,
+  ([slug, , , , extra]) => extra?.active !== false && COUNTED[slug] !== 0,
 ).map(([slug]) => slug);
 
 export const PROMO = {
@@ -436,6 +453,7 @@ function promotions(now: Date): PromotionDoc[] {
 }
 
 export function buildCatalog(now: Date, img: ImageRefs): Catalog {
+  const branchDocs = branches(now, img);
   return {
     tenant: {
       _id: TENANT_ID,
@@ -459,10 +477,14 @@ export function buildCatalog(now: Date, img: ImageRefs): Catalog {
       products: { enabled: true },
       ...stampAt(ago(now, 425)),
     },
-    branches: branches(now, img),
+    branches: branchDocs,
     services: services(now, img),
     packages: packages(now, img),
     products: products(now),
+    productStock: productStock(
+      now,
+      branchDocs.map((b) => b._id),
+    ),
     promotions: promotions(now),
   };
 }
