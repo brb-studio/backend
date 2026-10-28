@@ -22,7 +22,7 @@
   "dependencies": {
     "hono": "4.13.9",
     "mongodb": "7.7.0",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
