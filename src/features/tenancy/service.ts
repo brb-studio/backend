@@ -180,6 +180,7 @@ export async function publicTenant(tenant: TenantDoc) {
     brand: tenant.brand,
     payments: publicPayments(tenant),
     products: tenant.products?.enabled === true,
+    invoices: tenant.invoicing?.enabled === true,
     branches: branches.map(({ active: _, ...branch }) => toBranch(branch)),
   };
 }
