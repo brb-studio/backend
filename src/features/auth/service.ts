@@ -61,6 +61,7 @@ export async function sessionAuth(
     tenantId,
     role: user.role,
     ...(user.branchId && { branchId: user.branchId }),
+    ...(user.mustChangePassword && { mustChangePassword: true }),
   };
 }
 
@@ -160,6 +161,7 @@ export async function changePassword(
         passwordHash: await Bun.password.hash(next),
         updatedAt: new Date(),
       },
+      $unset: { mustChangePassword: "" },
     },
   );
   await platform.sessions.deleteMany({
@@ -185,4 +187,5 @@ export const toUser = (user: UserDoc) => ({
   active: user.active,
   emailVerified: Boolean(user.emailVerifiedAt),
   ...(user.branchId && { branchId: user.branchId.toHexString() }),
+  ...(user.mustChangePassword && { mustChangePassword: true }),
 });

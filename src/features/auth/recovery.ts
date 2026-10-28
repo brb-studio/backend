@@ -164,6 +164,7 @@ export async function resetPassword(
         passwordHash: await Bun.password.hash(newPassword),
         updatedAt: now,
       },
+      $unset: { mustChangePassword: "" },
     },
   );
   if (!user) throw invalidToken();

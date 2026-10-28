@@ -130,3 +130,29 @@ Manager y barber MUST tener `branchId`; un admin MUST NOT tenerlo (si no se cump
 #### Scenario: Mover a un barbero vinculado
 - **WHEN** se cambia de sucursal la cuenta de un barbero que tiene perfil vinculado
 - **THEN** la respuesta es 409 `LINKED_BARBER`
+
+### Requirement: Exportar los datos propios
+Un cliente SHALL poder descargar `GET /v1/auth/me/export` con lo que la barbería guarda de él: perfil, citas (con su pago y su cobro en mostrador), avisos, lista de espera y apartados de productos. Solo entran registros de esa barbería. La exportación MUST NOT incluir contraseña, sesiones, claves de dispositivos para avisos ni identificadores de Stripe. El staff recibe 403.
+
+#### Scenario: Descarga de los propios datos
+- **WHEN** un cliente pide su exportación
+- **THEN** recibe su perfil y sus registros de esa barbería, sin los de otra
+
+#### Scenario: Staff intenta descargar
+- **WHEN** un owner, admin, encargado o barbero pide `GET /v1/auth/me/export`
+- **THEN** la respuesta es 403 `FORBIDDEN`
+
+### Requirement: Contraseña temporal del equipo
+Las cuentas de staff que crea el owner o un admin SHALL empezar con una contraseña temporal y con `mustChangePassword`. Mientras esa marca esté activa, solo `POST /v1/auth/password`, `GET /v1/auth/me` y `POST /v1/auth/logout` responden; cualquier otra ruta MUST responder 403 `PASSWORD_CHANGE_REQUIRED`. Cambiar la contraseña, o restablecerla con el enlace del correo, quita la marca.
+
+#### Scenario: Primer inicio de sesión con contraseña temporal
+- **WHEN** el staff entra con la contraseña temporal
+- **THEN** la respuesta incluye `user.mustChangePassword: true` y el panel le pide elegir una contraseña antes de mostrar cualquier sección
+
+#### Scenario: Ruta del panel con la marca activa
+- **WHEN** el staff con la marca pide `GET /v1/appointments/my-day`
+- **THEN** la respuesta es 403 `PASSWORD_CHANGE_REQUIRED`
+
+#### Scenario: Cambio de contraseña quita la marca
+- **WHEN** el staff cambia su contraseña
+- **THEN** la marca se quita y las rutas del panel responden normalmente

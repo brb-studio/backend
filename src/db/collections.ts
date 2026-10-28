@@ -193,6 +193,8 @@ export type UserDoc = {
   branchId?: ObjectId;
   active: boolean;
   termsAcceptedAt?: Date;
+  /** Staff accounts start with a temporary password; until they choose their own, only the password and session routes answer. */
+  mustChangePassword?: true;
   deletedAt?: Date;
   createdAt: Date;
   updatedAt: Date;

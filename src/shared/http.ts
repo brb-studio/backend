@@ -16,6 +16,7 @@ export type Auth = {
   tenantId: ObjectId;
   role: Role;
   branchId?: ObjectId;
+  mustChangePassword?: true;
 };
 
 export type Env = {

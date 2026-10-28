@@ -44,6 +44,7 @@ export async function createStaff(
     branchId: input.branchId,
     active: true,
     passwordHash: await Bun.password.hash(temporaryPassword),
+    mustChangePassword: true,
     createdAt: now,
     updatedAt: now,
   };

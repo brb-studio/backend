@@ -12,6 +12,7 @@ import {
 } from "../../shared/http";
 import { requireActiveSubscription } from "../tenancy/subscription";
 import { deleteAccount } from "./erase";
+import { exportMyData } from "./export";
 import { STAFF } from "./policy";
 import { updateProfile } from "./profile";
 import {
@@ -64,11 +65,25 @@ export const requireRole = (...roles: Role[]) =>
     await next();
   });
 
+/** What a account with a temporary password may still call: change the password, read who it is, sign out. */
+const WHILE_PASSWORD_PENDING = new Set([
+  "/v1/auth/password",
+  "/v1/auth/me",
+  "/v1/auth/logout",
+]);
+
 export function authOf(c: Context<Env>, roles: Role[] = ANYONE) {
   const auth = c.var.auth;
   if (!auth) throw new AppError(401, "UNAUTHENTICATED", "Sign in required");
   if (!roles.includes(auth.role)) {
     throw new AppError(403, "FORBIDDEN", "Not allowed");
+  }
+  if (auth.mustChangePassword && !WHILE_PASSWORD_PENDING.has(c.req.path)) {
+    throw new AppError(
+      403,
+      "PASSWORD_CHANGE_REQUIRED",
+      "Choose your own password first",
+    );
   }
   return auth;
 }
@@ -169,6 +184,9 @@ export const authRoutes = new Hono<Env>()
     return c.body(null, 204);
   })
   .get("/me", async (c) => c.json({ user: toUser(await getUser(authOf(c))) }))
+  .get("/me/export", requireRole("customer"), async (c) =>
+    c.json(await exportMyData(authOf(c), c.var.tenant.name)),
+  )
   .patch("/me", requireRole("customer"), async (c) => {
     const input = await readJson(c, profileSchema);
     return c.json({ user: toUser(await updateProfile(authOf(c), input)) });
