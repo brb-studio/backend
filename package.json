@@ -20,7 +20,7 @@
   },
   "trustedDependencies": [],
   "dependencies": {
-    "hono": "4.13.9",
+    "hono": "4.13.11",
     "mongodb": "7.7.0",
     "zod": "4.6.6"
   },
