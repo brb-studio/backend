@@ -19,6 +19,7 @@ describe("parseConfig", () => {
       PORT: 4000,
       MONGO_URL: local.MONGO_URL,
       MONGO_DB: "brb-studio",
+      EXPO_PUSH_API_URL: "https://exp.host/--/api/v2/push",
       PLATFORM_DOMAIN: "localhost",
       CORS_ORIGINS: "",
       SUBSCRIPTION_PRICE_MINOR: 30_000,

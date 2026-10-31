@@ -169,7 +169,13 @@ async function tell(tenant: WaitTenant, branch: BranchDoc, entry: WaitlistDoc) {
     tag: `waitlist:${entry._id.toHexString()}`,
     url: path,
   };
-  await deliverMessages(tenant, [{ userId: entry.customerId, message }]);
+  await deliverMessages(tenant, [
+    {
+      userId: entry.customerId,
+      message,
+      native: { ...message, body: day },
+    },
+  ]);
   const customer = await forTenant(tenant._id).users.findOne(
     { _id: entry.customerId },
     { projection: { email: 1 } },

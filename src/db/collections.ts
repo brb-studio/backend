@@ -490,6 +490,32 @@ export type PushSubscriptionDoc = {
 export const pushSubscriptions =
   db.collection<PushSubscriptionDoc>("pushSubscriptions");
 
+/** Expo Push token of a native app install. One token belongs to one account at a time. */
+export type NativePushDeviceDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  userId: ObjectId;
+  token: string;
+  platform: "ios" | "android";
+  lastSeenAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export const nativePushDevices =
+  db.collection<NativePushDeviceDoc>("nativePushDevices");
+
+/** Ticket from the Expo Push Service whose delivery result is still unknown. */
+export type PushReceiptDoc = {
+  _id: ObjectId;
+  tenantId: ObjectId;
+  token: string;
+  ticketId: string;
+  createdAt: Date;
+};
+
+export const pushReceipts = db.collection<PushReceiptDoc>("pushReceipts");
+
 export type ProductDoc = {
   _id: ObjectId;
   tenantId: ObjectId;
@@ -1342,6 +1368,57 @@ export const specs: CollectionSpec[] = [
     indexes: [
       { key: { endpoint: 1 }, name: "endpoint_unique", unique: true },
       { key: { tenantId: 1, userId: 1 }, name: "tenant_user" },
+    ],
+  },
+  {
+    name: "nativePushDevices",
+    validator: {
+      $jsonSchema: object(
+        [
+          "tenantId",
+          "userId",
+          "token",
+          "platform",
+          "lastSeenAt",
+          "createdAt",
+          "updatedAt",
+        ],
+        {
+          tenantId: objectId,
+          userId: objectId,
+          token: string({
+            pattern: "^Expo(nent)?PushToken\\[[A-Za-z0-9_-]{8,128}\\]$",
+          }),
+          platform: oneOf(["ios", "android"]),
+          lastSeenAt: date,
+          ...timestamps,
+        },
+      ),
+    },
+    indexes: [
+      { key: { token: 1 }, name: "token_unique", unique: true },
+      {
+        key: { tenantId: 1, userId: 1, lastSeenAt: 1 },
+        name: "tenant_user_seen",
+      },
+    ],
+  },
+  {
+    name: "pushReceipts",
+    validator: {
+      $jsonSchema: object(["tenantId", "token", "ticketId", "createdAt"], {
+        tenantId: objectId,
+        token: string(),
+        ticketId: string(),
+        createdAt: date,
+      }),
+    },
+    indexes: [
+      {
+        key: { createdAt: 1 },
+        name: "createdAt_ttl",
+        expireAfterSeconds: 2 * 24 * 60 * 60,
+      },
     ],
   },
   {

@@ -114,6 +114,12 @@ const schema = z
       .string()
       .regex(/^(mailto:|https:\/\/)/)
       .optional(),
+    /** Optional. Sent with every Expo push request; enables Expo's enhanced push security. */
+    EXPO_ACCESS_TOKEN: z.string().min(1).optional(),
+    /** Expo Push Service base URL. Tests point it at a local fake. */
+    EXPO_PUSH_API_URL: z
+      .url({ protocol: /^https?$/ })
+      .default("https://exp.host/--/api/v2/push"),
   })
   .refine(
     (env) =>

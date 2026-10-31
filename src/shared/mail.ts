@@ -47,7 +47,6 @@ export async function sendMail(mail: Mail): Promise<void> {
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
-      // Resend's error says what to fix (bad sender, unverified domain...); it never echoes the email body.
       const error = errorBody.safeParse(await res.json().catch(() => null));
       const reason = error.success
         ? [error.data.name, error.data.message].filter(Boolean).join(": ")

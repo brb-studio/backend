@@ -1,6 +1,7 @@
 import type { WithId } from "mongodb";
 import { platform, type TenantDoc } from "../../db/scoped";
 import { sendDigest } from "../notifications/digest";
+import { checkNativeReceipts } from "../notifications/native-push";
 import { sendReminders } from "../notifications/reminders";
 import { expireOrders } from "../products/expire";
 import { isSubscriptionActive } from "../tenancy/subscription";
@@ -29,6 +30,15 @@ const failed = (event: string, tenant: Row) => (err: unknown) =>
   );
 
 export async function runScheduled(now = new Date()) {
+  await checkNativeReceipts(now).catch((err: unknown) =>
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "native_receipts_failed",
+        message: String(err),
+      }),
+    ),
+  );
   const cursor = platform.tenants.find({}).project<Row>({
     name: 1,
     slug: 1,

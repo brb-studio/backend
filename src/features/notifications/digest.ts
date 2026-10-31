@@ -106,7 +106,7 @@ export async function sendDigest(tenant: DigestTenant, now = new Date()) {
     };
     await deliverMessages(
       tenant,
-      recipients.map((userId) => ({ userId, message })),
+      recipients.map((userId) => ({ userId, message, native: message })),
     );
   }
 }

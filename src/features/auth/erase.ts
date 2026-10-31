@@ -89,6 +89,7 @@ export async function deleteAccount(
     platform.sessions.deleteMany({ userId: user._id }),
     t.authTokens.deleteMany({ userId: user._id }),
     t.pushSubscriptions.deleteMany({ userId: user._id }),
+    t.nativePushDevices.deleteMany({ userId: user._id }),
     t.notifications.deleteMany({ userId: user._id }),
     t.waitlist.deleteMany({ customerId: user._id }),
   ]);

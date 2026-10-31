@@ -21,6 +21,7 @@ import {
   sendPush,
   type VapidKeys,
 } from "../../shared/web-push";
+import { deliverNative, type NativeMessage } from "./native-push";
 
 export const summaryOf = (
   appointment: Pick<AppointmentDoc, "startAt" | "timeZone" | "items">,
@@ -214,12 +215,8 @@ const TITLES: Record<Locale, Record<NotificationDoc["type"], string>> = {
   },
 };
 
-export function pushMessage(
-  n: NotificationDoc,
-  locale: Locale,
-  tenantName: string,
-) {
-  const when = new Intl.DateTimeFormat(locale, {
+const whenOf = (n: NotificationDoc, locale: Locale) =>
+  new Intl.DateTimeFormat(locale, {
     weekday: "short",
     day: "numeric",
     month: "short",
@@ -227,6 +224,13 @@ export function pushMessage(
     minute: "2-digit",
     timeZone: "UTC",
   }).format(new Date(`${n.summary.start}:00Z`));
+
+export function pushMessage(
+  n: NotificationDoc,
+  locale: Locale,
+  tenantName: string,
+) {
+  const when = whenOf(n, locale);
   const items = n.summary.items
     .map((name) => name[locale] ?? name.es ?? name.en ?? "")
     .join(" + ");
@@ -236,6 +240,19 @@ export function pushMessage(
     // The barbershop's name tells people with several accounts which one is talking.
     title: `${TITLES[locale][n.type]} · ${tenantName}`,
     body: [who, items, when, n.summary.branchName].filter(Boolean).join(" · "),
+    tag: n.appointmentId.toHexString(),
+    url: `/${locale}/account`,
+  };
+}
+
+export function nativeMessage(
+  n: NotificationDoc,
+  locale: Locale,
+  tenantName: string,
+): NativeMessage {
+  return {
+    title: `${TITLES[locale][n.type]} · ${tenantName}`,
+    body: whenOf(n, locale),
     tag: n.appointmentId.toHexString(),
     url: `/${locale}/account`,
   };
@@ -262,10 +279,25 @@ export const deliverPush = (tenant: PushTenant, list: NotificationDoc[]) =>
     list.map((n) => ({
       userId: n.userId,
       message: pushMessage(n, tenant.defaultLocale, tenant.name),
+      native: nativeMessage(n, tenant.defaultLocale, tenant.name),
     })),
   );
 
 export async function deliverMessages(
+  tenant: PushTenant,
+  items: { userId: ObjectId; message: PushMessage; native: NativeMessage }[],
+) {
+  if (items.length === 0) return;
+  await Promise.all([
+    deliverWeb(tenant, items),
+    deliverNative(
+      tenant._id,
+      items.map(({ userId, native }) => ({ userId, message: native })),
+    ),
+  ]);
+}
+
+async function deliverWeb(
   tenant: PushTenant,
   items: { userId: ObjectId; message: PushMessage }[],
 ) {

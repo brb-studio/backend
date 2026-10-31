@@ -7,6 +7,12 @@ import { isPushEndpoint } from "../../shared/web-push";
 import { STAFF } from "../auth/policy";
 import { authOf, requireRole } from "../auth/routes";
 import {
+  nativeDevice,
+  nativeDeviceRemoval,
+  subscribeNative,
+  unsubscribeNative,
+} from "./native-push";
+import {
   listNotifications,
   markRead,
   pushPublicKey,
@@ -73,6 +79,15 @@ export const notificationRoutes = new Hono<Env>()
   .delete("/push-subscriptions", async (c) => {
     const input = await readJson(c, z.object({ endpoint }));
     await unsubscribePush(authOf(c), input.endpoint);
+    return c.body(null, 204);
+  })
+  .post("/native-devices", async (c) => {
+    await subscribeNative(authOf(c), await readJson(c, nativeDevice));
+    return c.body(null, 204);
+  })
+  .delete("/native-devices", async (c) => {
+    const input = await readJson(c, nativeDeviceRemoval);
+    await unsubscribeNative(authOf(c), input.token);
     return c.body(null, 204);
   })
   .get("/stream", (c) => {

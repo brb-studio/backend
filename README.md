@@ -126,6 +126,7 @@ Every `/v1` request needs the tenant's host in `X-Tenant-Host` or `X-Forwarded-H
 | `PATCH /platform/barbers/:id/commission` | platform staff | `{ commissionBps: 0–10000 \| null }`; `null` removes the rate |
 | `POST /platform/payouts` | platform staff | `{ barberId, appointmentIds, reference?, paidAt? }` settles completed cuts; the amount is the sum of their commissions. 409 `COMMISSION_NOT_CONFIGURED`, `INVALID_APPOINTMENTS`, `ALREADY_PAID` |
 | `GET /v1/notifications/push-key` · `POST` · `DELETE /v1/notifications/push-subscriptions` | any account | VAPID public key (404 `PUSH_DISABLED` without keys) and the browser's push subscription |
+| `POST` · `DELETE /v1/notifications/native-devices` | any account | `{ token, platform }` registers an Expo push token (`ExpoPushToken[...]`, 422 otherwise), at most 10 per account; `{ token }` removes it. Native alerts go through the Expo Push Service with title, time and route only (no customer data). Set `EXPO_ACCESS_TOKEN` to enable Expo's enhanced push security; `EXPO_PUSH_API_URL` overrides the service URL |
 
 Writes return 402 `SUBSCRIPTION_INACTIVE` when the subscription is canceled or ended more than 7 days ago. Sessions last 30 days and renew once past half their life.
 
