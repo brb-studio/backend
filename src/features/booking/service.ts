@@ -769,7 +769,7 @@ async function localDay(t: TenantDb, date: string) {
   };
 }
 
-async function findVisible(auth: Auth, id: ObjectId) {
+export async function findVisible(auth: Auth, id: ObjectId) {
   const appointment = await forTenant(auth.tenantId).appointments.findOne({
     $and: [{ _id: id }, ...(await visibleTo(auth))],
   });

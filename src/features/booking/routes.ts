@@ -21,6 +21,7 @@ import {
   rescheduleMineBody,
   rescheduleSlotsQuery,
   staffBooking,
+  staffRescheduleQuery,
 } from "./schemas";
 import {
   bookAsStaff,
@@ -35,6 +36,7 @@ import {
   rescheduleSlots,
   updateAppointment,
 } from "./service";
+import { staffRescheduleSlots } from "./staff-slots";
 
 export const publicBookingRoutes = new Hono<Env>()
   .post("/appointments", requireActiveSubscription, async (c) => {
@@ -104,6 +106,12 @@ export const appointmentRoutes = new Hono<Env>()
   .get("/:id", async (c) =>
     c.json(await getAppointment(authOf(c), parseId(c.req.param("id")))),
   )
+  .get("/:id/slots", async (c) => {
+    const query = parse(staffRescheduleQuery, c.req.query());
+    return c.json(
+      await staffRescheduleSlots(authOf(c), parseId(c.req.param("id")), query),
+    );
+  })
   .post("/", requireActiveSubscription, async (c) => {
     const input = await readJson(c, staffBooking);
     return c.json(await bookAsStaff(c.var.tenant, authOf(c), input), 201);

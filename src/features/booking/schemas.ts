@@ -122,6 +122,10 @@ export const rescheduleSlotsQuery = z.object({
   days: z.coerce.number().int().min(1).max(31).optional(),
 });
 
+export const staffRescheduleQuery = rescheduleSlotsQuery.extend({
+  barberId: objectId.optional(),
+});
+
 export const historyQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(5),

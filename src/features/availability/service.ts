@@ -146,7 +146,7 @@ export type SlotBarber = Pick<
   | "active"
 >;
 
-const SLOT_BARBER_FIELDS = {
+export const SLOT_BARBER_FIELDS = {
   slug: 1,
   name: 1,
   image: 1,
