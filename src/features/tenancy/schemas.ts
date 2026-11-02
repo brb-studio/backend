@@ -165,6 +165,7 @@ export const tenantUpdate = z
         instagramUrl: https.optional(),
         authImage: image.optional(),
         coverImage: image.optional(),
+        logo: image.optional(),
       })
       .optional(),
     reminders: z.strictObject({ enabled: z.boolean() }).optional(),

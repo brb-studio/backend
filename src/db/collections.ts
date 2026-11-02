@@ -58,7 +58,12 @@ export type TenantDoc = {
   locales: Locale[];
   defaultLocale: Locale;
   theme?: Record<string, ThemeValue>;
-  brand: { instagramUrl?: string; authImage?: string; coverImage?: string };
+  brand: {
+    instagramUrl?: string;
+    authImage?: string;
+    coverImage?: string;
+    logo?: string;
+  };
   subscription: {
     plan: Plan;
     status: (typeof STATUSES)[number];
@@ -466,11 +471,26 @@ export type NotificationDoc = {
 
 export const notifications = db.collection<NotificationDoc>("notifications");
 
+export const IMAGE_KINDS = [
+  "logo",
+  "brand",
+  "services",
+  "packages",
+  "products",
+  "barbers",
+  "branches",
+  "other",
+] as const;
+export type ImageKind = (typeof IMAGE_KINDS)[number];
+
 export type ImageDoc = {
   _id: string;
   tenantId: ObjectId;
   contentType: "image/jpeg" | "image/png" | "image/webp";
-  data: Binary;
+  kind?: ImageKind;
+  data?: Binary;
+  url?: string;
+  providerId?: string;
   size: number;
   createdBy: ObjectId;
   createdAt: Date;
@@ -1334,12 +1354,15 @@ export const specs: CollectionSpec[] = [
     name: "images",
     validator: {
       $jsonSchema: object(
-        ["tenantId", "contentType", "data", "size", "createdBy", "createdAt"],
+        ["tenantId", "contentType", "size", "createdBy", "createdAt"],
         {
           _id: string({ pattern: "^[A-Za-z0-9_-]{22}$" }),
           tenantId: objectId,
           contentType: oneOf(["image/jpeg", "image/png", "image/webp"]),
+          kind: oneOf(IMAGE_KINDS),
           data: { bsonType: "binData" },
+          url: string({ pattern: "^https://", maxLength: 500 }),
+          providerId: string({ maxLength: 200 }),
           size: int(1, 1024 * 1024),
           createdBy: objectId,
           createdAt: date,

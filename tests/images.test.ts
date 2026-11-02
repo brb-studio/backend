@@ -1,7 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { ObjectId } from "mongodb";
 import { app } from "../src/app";
-import { services } from "../src/db/collections";
+import { config } from "../src/config";
+import { images, services } from "../src/db/collections";
 import { api, createShop, createUser } from "./helpers";
 
 // A real 1×1 PNG.
@@ -17,8 +18,9 @@ const upload = (
   token: string,
   body: Uint8Array,
   type = "image/png",
+  kind?: string,
 ) =>
-  app.request("/v1/images", {
+  app.request(`/v1/images${kind ? `?kind=${kind}` : ""}`, {
     method: "POST",
     headers: {
       "X-Forwarded-Host": host,
@@ -134,4 +136,68 @@ test("an older document with a single image reads as a one-photo gallery until a
   expect(
     (await services.findOne({ _id: new ObjectId(id) }))?.image,
   ).toBeUndefined();
+});
+
+test("with Get Pronto configured the photo goes to its CDN, and a failed upload saves nothing", async () => {
+  const shop = await createShop();
+  const cdnUrl = "https://api.getpronto.io/v1/file/u/photo.png";
+  const calls: string[] = [];
+  let presignBody: unknown;
+  let presignStatus = 200;
+  const spy = spyOn(globalThis, "fetch").mockImplementation((async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    calls.push(`${init?.method} ${url.hostname}${url.pathname}`);
+    if (url.pathname.endsWith("/upload/presign")) {
+      presignBody = JSON.parse(String(init?.body));
+      return Response.json(
+        { uploadUrl: "https://storage.test/put", pendingUploadId: "p1" },
+        { status: presignStatus },
+      );
+    }
+    if (url.pathname.endsWith("/upload/confirm")) {
+      return Response.json({ file: { id: "f1", secureUrl: cdnUrl } });
+    }
+    return new Response(null, {
+      status: url.hostname === "storage.test" ? 200 : 404,
+    });
+  }) as typeof fetch);
+  config.GETPRONTO_API_KEY = "pronto_sk_test";
+  try {
+    const res = await upload(
+      shop.host,
+      shop.owner.token,
+      PNG,
+      "image/png",
+      "products",
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string; url: string };
+    expect(body.url).toBe(cdnUrl);
+    expect(presignBody).toMatchObject({
+      folderName: shop.tenant._id.toHexString(),
+      customFilename: `products-${body.id}.png`,
+    });
+    expect((await images.findOne({ _id: body.id }))?.kind).toBe("products");
+    expect(
+      (await upload(shop.host, shop.owner.token, PNG, "image/png", "nope"))
+        .status,
+    ).toBe(422);
+    expect(calls).toEqual([
+      "POST api.getpronto.io/v1/upload/presign",
+      "PUT storage.test/put",
+      "POST api.getpronto.io/v1/upload/confirm",
+    ]);
+    expect((await app.request(`/images/${body.id}`)).status).toBe(404);
+
+    presignStatus = 500;
+    const failed = await upload(shop.host, shop.owner.token, PNG);
+    expect(failed.status).toBe(502);
+    expect(await images.countDocuments({ tenantId: shop.tenant._id })).toBe(1);
+  } finally {
+    config.GETPRONTO_API_KEY = undefined;
+    spy.mockRestore();
+  }
 });

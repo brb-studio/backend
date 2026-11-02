@@ -14,3 +14,4 @@ process.env.PAYMENT_HOLD_TRANSFER_MIN = "60";
 // Never send real email from tests, whatever a developer's .env says: they read the in-memory outbox.
 delete process.env.RESEND_API_KEY;
 delete process.env.MAIL_FROM;
+delete process.env.GETPRONTO_API_KEY;

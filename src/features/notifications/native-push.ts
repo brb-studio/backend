@@ -107,7 +107,6 @@ export async function unsubscribeNative(auth: Auth, token: string) {
   });
 }
 
-
 export async function deliverNative(
   tenantId: ObjectId,
   items: { userId: ObjectId; message: NativeMessage }[],

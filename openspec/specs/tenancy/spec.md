@@ -43,7 +43,7 @@ El sistema SHALL exponer en `GET /v1/public/tenant`, sin sesión: nombre, moneda
 - **THEN** recibe solo las sucursales con `active: true` y ningún dato de facturación
 
 ### Requirement: Marca y tema por barbería
-Owner y admin SHALL poder cambiar el nombre, la marca (`instagramUrl` https, `authImage`, `coverImage`) y el tema. El tema MUST usar solo los tokens `canvas, surface, card, fg, fg-muted, line, line-strong, glass, sheet, accent, accent-fg, accent-text`, cada uno con un color (hex, nombre, `rgb/hsl/oklch/oklab/color-mix(...)`) o con un par `{ light, dark }`.
+Owner y admin SHALL poder cambiar el nombre, la marca (`instagramUrl` https, `authImage`, `coverImage`, `logo`) y el tema. El tema MUST usar solo los tokens `canvas, surface, card, fg, fg-muted, line, line-strong, glass, sheet, accent, accent-fg, accent-text`, cada uno con un color (hex, nombre, `rgb/hsl/oklch/oklab/color-mix(...)`) o con un par `{ light, dark }`.
 
 #### Scenario: Token de tema desconocido o valor inseguro
 - **WHEN** se envía un token fuera de la lista o un valor con `;`, `{` o comillas

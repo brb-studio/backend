@@ -95,6 +95,10 @@ const schema = z
       .default(60),
     /** Transactional email (verification and password reset) through Resend. Both or neither. */
     RESEND_API_KEY: z.string().min(10).optional(),
+    GETPRONTO_API_KEY: z
+      .string()
+      .regex(/^pronto_sk_\S+$/, "use a secret key (pronto_sk_…)")
+      .optional(),
     MAIL_FROM: z
       .string()
       .regex(

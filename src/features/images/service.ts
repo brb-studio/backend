@@ -1,8 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { Binary } from "mongodb";
+import { Binary, type ObjectId } from "mongodb";
+import { config } from "../../config";
 import { hit } from "../../db/rate-limit";
-import { forTenant, type ImageDoc, platform } from "../../db/scoped";
+import {
+  forTenant,
+  type ImageDoc,
+  type ImageKind,
+  platform,
+} from "../../db/scoped";
 import { AppError, type Auth } from "../../shared/http";
+import { storeInGetPronto } from "./getpronto";
 
 export const MAX_IMAGE_BYTES = 1024 * 1024;
 
@@ -10,6 +17,16 @@ const MAX_IMAGES_PER_TENANT = 500;
 const HOUR_MS = 60 * 60 * 1000;
 
 export type ImageType = "image/jpeg" | "image/png" | "image/webp";
+
+export const imagePath = (
+  tenantId: ObjectId,
+  kind: ImageKind,
+  id: string,
+  contentType: ImageType,
+) => ({
+  folder: tenantId.toHexString(),
+  name: `${kind}-${id}.${contentType.slice("image/".length)}`,
+});
 
 export function sniff(bytes: Uint8Array): ImageType | undefined {
   const at = (offset: number, signature: number[]) =>
@@ -24,7 +41,11 @@ export function sniff(bytes: Uint8Array): ImageType | undefined {
   return undefined;
 }
 
-export async function uploadImage(auth: Auth, bytes: Uint8Array) {
+export async function uploadImage(
+  auth: Auth,
+  kind: ImageKind,
+  bytes: Uint8Array,
+) {
   if (bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) {
     throw new AppError(413, "TOO_LARGE", "Images must be 1 MB or less");
   }
@@ -40,15 +61,34 @@ export async function uploadImage(auth: Auth, bytes: Uint8Array) {
     throw new AppError(409, "IMAGE_LIMIT", "This shop has too many images");
   }
   const id = randomBytes(16).toString("base64url");
-  await t.images.insertOne({
+  const base = {
     _id: id,
     contentType,
-    data: new Binary(bytes),
+    kind,
     size: bytes.length,
     createdBy: auth.userId,
     createdAt: new Date(),
+  };
+  if (!config.GETPRONTO_API_KEY) {
+    await t.images.insertOne({ ...base, data: new Binary(bytes) });
+    return { id };
+  }
+  const stored = await storeInGetPronto(config.GETPRONTO_API_KEY, {
+    ...imagePath(auth.tenantId, kind, id, contentType),
+    contentType,
+    bytes,
+  }).catch((err: unknown) => {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "image_store_failed",
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    );
+    throw new AppError(502, "IMAGE_STORE_FAILED", "Could not save the image");
   });
-  return { id };
+  await t.images.insertOne({ ...base, url: stored.url, providerId: stored.id });
+  return { id, url: stored.url };
 }
 
 /** Photos are public (they're on the shop's pages), looked up by their unguessable id alone. */
