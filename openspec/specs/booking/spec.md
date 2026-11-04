@@ -92,7 +92,7 @@ El cliente de una cita SHALL ser siempre un documento de `users` de la misma bar
 - **THEN** la base lo rechaza por el índice único `tenant_guest_phone_unique` y la reserva reutiliza el existente
 
 ### Requirement: Lista de clientes
-Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1/customers?q=`): cuentas e invitados, nunca cuentas borradas ni personal, a lo más 50, de los más nuevos a los más viejos. Con `q` (hasta 80 caracteres), si solo tiene caracteres de teléfono busca sus dígitos dentro del teléfono; si no, busca el texto sin distinguir mayúsculas en nombre, correo y correo de contacto (los acentos sí cuentan). Cada cliente trae visitas (citas completadas), faltas (`no_show`), lo gastado (suma de `totalMinor` de las completadas), la fecha local de su última visita y de su próxima cita confirmada. Barberos y clientes reciben 403.
+Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1/customers?q=&page=&pageSize=`): cuentas e invitados, nunca cuentas borradas ni personal, de los más nuevos a los más viejos, por páginas. `pageSize` MUST ser 10, 20 o 50 (otro valor es 422) y `page` empieza en 1; sin ellos la respuesta es la primera página de 50. La respuesta trae `total` (los clientes que cumplen el filtro), `page` y `pageSize`; una página después de la última viene vacía. Con `q` (hasta 80 caracteres), si solo tiene caracteres de teléfono busca sus dígitos dentro del teléfono; si no, busca el texto sin distinguir mayúsculas en nombre, correo y correo de contacto (los acentos sí cuentan). Cada cliente trae visitas (citas completadas), faltas (`no_show`), lo gastado (suma de `totalMinor` de las completadas), la fecha local de su última visita y de su próxima cita confirmada. Barberos y clientes reciben 403.
 
 #### Scenario: Buscar por teléfono
 - **WHEN** el dueño busca "664 222"
@@ -102,8 +102,12 @@ Owner, admin y manager SHALL poder listar los clientes de su barbería (`GET /v1
 - **WHEN** un manager ve a un cliente que fue una vez a su sucursal y otra a otra sucursal
 - **THEN** ese cliente aparece con 1 visita
 
+#### Scenario: Lista por páginas
+- **WHEN** la barbería tiene 25 clientes y el dueño pide `page=3&pageSize=10`
+- **THEN** recibe los 5 más viejos, con `total` 25, `page` 3 y `pageSize` 10
+
 ### Requirement: Alcance y límite de la lista de clientes
-En la lista de clientes, un manager MUST ver solo a los clientes con al menos una cita (en cualquier estado) en su sucursal, y sus números solo cuentan citas de su sucursal; owner y admin ven a todos. Cada usuario puede listar a lo más 60 veces cada 10 minutos; después la respuesta MUST ser 429 `RATE_LIMITED`.
+En la lista de clientes, un manager MUST ver solo a los clientes con al menos una cita (en cualquier estado) en su sucursal, y sus números solo cuentan citas de su sucursal; owner y admin ven a todos. Cada usuario puede buscar (listar con `q`) a lo más 60 veces cada 10 minutos; después la respuesta MUST ser 429 `RATE_LIMITED`. Listar o cambiar de página sin `q` no cuenta para ese límite.
 
 #### Scenario: Manager no ve clientes de otra sucursal
 - **WHEN** un cliente solo ha reservado en la sucursal B y el manager de la sucursal A lista o busca clientes

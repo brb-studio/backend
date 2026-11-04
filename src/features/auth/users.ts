@@ -115,3 +115,30 @@ export async function updateStaff(
     await platform.sessions.deleteMany({ userId: id });
   return updated;
 }
+
+/**
+ * A new temporary password for a teammate who lost theirs (or never received the first one): the
+ * old one and every open session stop working, and they must choose their own when they sign in.
+ */
+export async function resetStaffPassword(auth: Auth, id: ObjectId) {
+  const t = forTenant(auth.tenantId);
+  const target = await t.users.findOne({ _id: id, role: { $ne: "customer" } });
+  if (!target) throw new AppError(404, "NOT_FOUND", "Not found");
+  if (target.role === "owner" || target._id.equals(auth.userId)) {
+    throw forbidden();
+  }
+  if (target.role === "admin" && auth.role !== "owner") throw forbidden();
+  const temporaryPassword = randomToken(12);
+  await t.users.updateOne(
+    { _id: id },
+    {
+      $set: {
+        passwordHash: await Bun.password.hash(temporaryPassword),
+        mustChangePassword: true,
+        updatedAt: new Date(),
+      },
+    },
+  );
+  await platform.sessions.deleteMany({ userId: id });
+  return { temporaryPassword };
+}

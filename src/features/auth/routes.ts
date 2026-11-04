@@ -45,7 +45,12 @@ import {
   sessionAuth,
   toUser,
 } from "./service";
-import { createStaff, listStaff, updateStaff } from "./users";
+import {
+  createStaff,
+  listStaff,
+  resetStaffPassword,
+  updateStaff,
+} from "./users";
 
 const ANYONE: Role[] = [...STAFF, "customer"];
 
@@ -204,4 +209,7 @@ export const userRoutes = new Hono<Env>()
     const id = parseId(c.req.param("id"));
     const input = await readJson(c, staffUpdate);
     return c.json(toUser(await updateStaff(authOf(c), id, input)));
-  });
+  })
+  .post("/:id/password", async (c) =>
+    c.json(await resetStaffPassword(authOf(c), parseId(c.req.param("id")))),
+  );

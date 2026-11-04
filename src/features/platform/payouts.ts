@@ -1,6 +1,14 @@
 import { type AnyBulkWriteOperation, ObjectId } from "mongodb";
-import { type AppointmentDoc, platform, transaction } from "../../db/scoped";
+import {
+  type AppointmentDoc,
+  type BarberDoc,
+  type BranchDoc,
+  platform,
+  transaction,
+} from "../../db/scoped";
+import { collect, mapBy } from "../../shared/cursor";
 import { AppError, isDuplicate } from "../../shared/http";
+import { localDate } from "../../shared/time";
 import { resolveCommission } from "./commission";
 
 export async function setCommissionRate(
@@ -131,4 +139,73 @@ export async function createPayout(
     }
     throw err;
   }
+}
+
+const DAY_MS = 864e5;
+
+/**
+ * The barbershop's payouts made on the local days `from`–`to` (the barber's branch zone), newest
+ * first: who, how much, how many cuts and the reference. A shop records few, so a bounded read is enough.
+ */
+export async function listPayouts(
+  tenantId: ObjectId,
+  from: string,
+  to: string,
+) {
+  // A day of slack on each side in UTC, then the exact local day of each payout decides.
+  const start = new Date(Date.parse(`${from}T00:00:00Z`) - DAY_MS);
+  const end = new Date(Date.parse(`${to}T00:00:00Z`) + 2 * DAY_MS);
+  const payouts = await collect(
+    platform.payouts
+      .find({ tenantId, paidAt: { $gte: start, $lt: end } })
+      .sort({ paidAt: -1 })
+      .limit(500),
+  );
+  const barberIds = [...new Set(payouts.map((p) => p.barberId.toHexString()))];
+  const barbers = await mapBy(
+    platform.barbers
+      .find({
+        tenantId,
+        _id: { $in: barberIds.map((id) => new ObjectId(id)) },
+      })
+      .project<Pick<BarberDoc, "_id" | "name" | "branchId">>({
+        name: 1,
+        branchId: 1,
+      }),
+    (b) => b._id.toHexString(),
+  );
+  const branchIds = [
+    ...new Set([...barbers.values()].map((b) => b.branchId.toHexString())),
+  ];
+  const branches = await mapBy(
+    platform.branches
+      .find({
+        tenantId,
+        _id: { $in: branchIds.map((id) => new ObjectId(id)) },
+      })
+      .project<Pick<BranchDoc, "_id" | "name" | "timeZone">>({
+        name: 1,
+        timeZone: 1,
+      }),
+    (b) => b._id.toHexString(),
+  );
+  return payouts.flatMap((p) => {
+    const barber = barbers.get(p.barberId.toHexString());
+    const branch = barber && branches.get(barber.branchId.toHexString());
+    const day = localDate(p.paidAt, branch?.timeZone ?? "UTC");
+    if (day < from || day > to) return [];
+    return [
+      {
+        id: p._id.toHexString(),
+        barberId: p.barberId.toHexString(),
+        barberName: barber?.name ?? "",
+        branchName: branch?.name ?? "",
+        currency: p.currency,
+        amountMinor: p.amountMinor,
+        appointments: p.appointmentIds.length,
+        ...(p.reference && { reference: p.reference }),
+        paidAt: p.paidAt.toISOString(),
+      },
+    ];
+  });
 }

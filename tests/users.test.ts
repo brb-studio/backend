@@ -151,6 +151,47 @@ describe("staff accounts", () => {
     ).toBe(200);
   });
 
+  test("a new temporary password replaces the old one and signs the account out", async () => {
+    const { tenant, host, branchId, asOwner, owner } = await createShop();
+    const barber = await createUser(tenant, "barber", {
+      branchId: new ObjectId(branchId),
+    });
+    const admin = await createUser(tenant, "admin");
+    const other = await createUser(tenant, "admin");
+    const customer = await createUser(tenant, "customer");
+    const reset = (id: ObjectId, as = asOwner) =>
+      api("POST", `/v1/users/${id}/password`, as);
+
+    const res = await reset(barber.user._id);
+    expect(res.status).toBe(200);
+    const temporary = String(res.body.temporaryPassword);
+    expect(temporary.length).toBeGreaterThanOrEqual(16);
+    expect(
+      (await api("GET", "/v1/auth/me", { host, token: barber.token })).status,
+    ).toBe(401);
+    const old = await api("POST", "/v1/auth/login", {
+      host,
+      body: { email: barber.user.email, password: PASSWORD },
+    });
+    expect(old.status).toBe(401);
+    const login = await api("POST", "/v1/auth/login", {
+      host,
+      body: { email: barber.user.email, password: temporary },
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.user).toMatchObject({ mustChangePassword: true });
+
+    const asAdmin = { host, token: admin.token };
+    expect((await reset(other.user._id, asAdmin)).status).toBe(403);
+    expect((await reset(admin.user._id, asAdmin)).status).toBe(403);
+    expect((await reset(owner.user._id, asAdmin)).status).toBe(403);
+    expect((await reset(owner.user._id)).status).toBe(403);
+    expect((await reset(customer.user._id)).status).toBe(404);
+    expect((await reset(other.user._id)).status).toBe(200);
+    const elsewhere = await createShop();
+    expect((await reset(barber.user._id, elsewhere.asOwner)).status).toBe(404);
+  });
+
   test("a manager moved to another branch loses the old one", async () => {
     const { tenant, host, branchId, asOwner } = await createShop();
     const second = await addBranch(host, asOwner.token);

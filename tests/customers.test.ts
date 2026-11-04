@@ -163,6 +163,37 @@ describe("customer list", () => {
   });
 });
 
+describe("customer list pages", () => {
+  test("pages newest first with the total; only 10, 20 or 50 per page", async () => {
+    const { tenant, asOwner } = await createShop();
+    for (let i = 1; i <= 25; i++) {
+      await createUser(tenant, "customer", {
+        name: `Cliente ${String(i).padStart(2, "0")}`,
+      });
+    }
+    const page = async (query: string) =>
+      (await api("GET", `/v1/customers?${query}`, asOwner)).body;
+
+    const first = await page("page=1&pageSize=10");
+    expect(first).toMatchObject({ total: 25, page: 1, pageSize: 10 });
+    expect(listed(first).map((c) => c.name)[0]).toBe("Cliente 25");
+    const third = await page("page=3&pageSize=10");
+    expect(listed(third).map((c) => c.name)).toEqual([
+      "Cliente 05",
+      "Cliente 04",
+      "Cliente 03",
+      "Cliente 02",
+      "Cliente 01",
+    ]);
+    expect(listed(await page("page=4&pageSize=10"))).toEqual([]);
+    // Without paging: the first 50, as before.
+    expect(await page("")).toMatchObject({ total: 25, page: 1, pageSize: 50 });
+    expect((await api("GET", "/v1/customers?pageSize=7", asOwner)).status).toBe(
+      422,
+    );
+  });
+});
+
 describe("customer list scoping and rate limit", () => {
   test("a manager only sees customers who booked at their branch; the owner sees everyone", async () => {
     const { tenant, host, owner, branchId, asOwner } = await createShop();
@@ -206,6 +237,12 @@ describe("customer list scoping and rate limit", () => {
     });
     expect(res.status).toBe(429);
     expect(res.body.error?.code).toBe("RATE_LIMITED");
+    // Paging without a search never counts, even past the limit.
+    const plain = await api("GET", "/v1/customers?page=2&pageSize=10", {
+      host,
+      token: admin.token,
+    });
+    expect(plain.status).toBe(200);
   });
 });
 

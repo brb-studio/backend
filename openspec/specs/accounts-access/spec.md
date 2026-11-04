@@ -156,3 +156,14 @@ Las cuentas de staff que crea el owner o un admin SHALL empezar con una contrase
 #### Scenario: Cambio de contraseña quita la marca
 - **WHEN** el staff cambia su contraseña
 - **THEN** la marca se quita y las rutas del panel responden normalmente
+
+### Requirement: Nueva contraseña temporal para el equipo
+Owner y admin SHALL poder dar una nueva contraseña temporal a una cuenta del equipo con `POST /v1/users/:id/password`, que la devuelve una sola vez en `temporaryPassword`. La contraseña anterior deja de valer, se borran todas las sesiones de esa cuenta y vuelve a quedar con `mustChangePassword`. Aplican las reglas de "Sin escalar privilegios": nadie se la da al owner ni a sí mismo (para eso está el cambio de contraseña) y solo el owner se la da a un admin; si no, 403 `FORBIDDEN`. Una cuenta de cliente o de otra barbería responde 404.
+
+#### Scenario: Un barbero perdió su contraseña temporal
+- **WHEN** el owner pide una nueva contraseña temporal para ese barbero
+- **THEN** recibe la nueva contraseña, la anterior y sus sesiones dejan de valer, y al entrar se le pide elegir una propia
+
+#### Scenario: Admin con otro admin
+- **WHEN** un admin pide una nueva contraseña temporal para otro admin
+- **THEN** la respuesta es 403 `FORBIDDEN`

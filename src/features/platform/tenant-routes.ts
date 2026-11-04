@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { type Env, parse, parseId, readJson } from "../../shared/http";
 import { authOf, requireRole } from "../auth/routes";
 import { requireActiveSubscription } from "../tenancy/subscription";
-import { createPayout, setCommissionRate } from "./payouts";
+import { createPayout, listPayouts, setCommissionRate } from "./payouts";
 import { breakdown, listAppointments } from "./queries";
 import { revenue } from "./revenue";
 import {
@@ -37,6 +37,10 @@ export const earningsRoutes = new Hono<Env>()
   .get("/summary", async (c) => {
     const { from, to } = parse(range, c.req.query());
     return c.json(await revenue(c.var.tenant, from, to));
+  })
+  .get("/payouts", async (c) => {
+    const { from, to } = parse(range, c.req.query());
+    return c.json({ rows: await listPayouts(authOf(c).tenantId, from, to) });
   })
   .patch("/barbers/:id", requireActiveSubscription, async (c) => {
     const { commissionBps } = await readJson(c, commissionUpdate);

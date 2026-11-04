@@ -9,7 +9,7 @@ import {
   productOrders,
 } from "../src/db/collections";
 import { platformLogin } from "../src/features/platform/auth";
-import { api, bookingShop, createShop, createUser } from "./helpers";
+import { api, bookingShop, createShop, createUser, dayIn } from "./helpers";
 
 const PASSWORD = "correct horse battery";
 
@@ -507,6 +507,35 @@ describe("earnings in the barbershop's own admin", () => {
     });
     expect(paid.status).toBe(201);
     expect(paid.body.amountMinor).toBe(7_500);
+    // The history of that day shows it, with its barber and how many cuts it settles. The day is the
+    // branch's own (Tijuana), not UTC's: around midnight UTC they differ.
+    const today = dayIn("America/Tijuana", 0);
+    const local = `from=${today}&to=${today}`;
+    const history = await api(
+      "GET",
+      `/v1/earnings/payouts?${local}`,
+      a.asOwner,
+    );
+    expect(history.status).toBe(200);
+    expect(history.body.rows).toEqual([
+      expect.objectContaining({
+        barberId: a.barbers.mateo,
+        amountMinor: 7_500,
+        appointments: 1,
+      }),
+    ]);
+    // Another shop sees none of it, and a manager can't look.
+    expect(
+      (await api("GET", `/v1/earnings/payouts?${local}`, b.asOwner)).body.rows,
+    ).toEqual([]);
+    expect(
+      (
+        await api("GET", `/v1/earnings/payouts?${local}`, {
+          host: a.host,
+          token: manager.token,
+        })
+      ).status,
+    ).toBe(403);
     expect(
       (await api("POST", "/v1/earnings/payouts", { ...a.asOwner, body })).body
         .error?.code,

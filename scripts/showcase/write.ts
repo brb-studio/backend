@@ -10,6 +10,7 @@ import {
   buildWaitlist,
 } from "./activity";
 import { buildAgenda } from "./agenda";
+import { BRAND } from "./brand";
 import { buildCatalog } from "./catalog";
 import { closeVisits } from "./counter";
 import { assertSafeTarget, checkDatabase } from "./guard";
@@ -19,7 +20,7 @@ import { applyPromotions } from "./loyalty";
 import { buildPeople } from "./people";
 import { buildTimeOff } from "./timeoff";
 
-export const DEMO_PASSWORD = "montecobre-demo";
+export const DEMO_PASSWORD = BRAND.password;
 
 type Owned = { _id: ObjectId | string; tenantId: ObjectId };
 
@@ -133,7 +134,7 @@ export async function buildShowcase(now: Date) {
  * notifications…) are deleted and inserted again in one transaction, so a rerun "moves the shop to now".
  */
 export async function seedShowcase(
-  options: { now?: Date; shared?: boolean } = {},
+  options: { now?: Date; shared?: boolean; allowDb?: string } = {},
 ) {
   const now = options.now ?? new Date();
   assertSafeTarget({
@@ -142,6 +143,7 @@ export async function seedShowcase(
     stripeKey: process.env.STRIPE_SECRET_KEY,
     mongoUrl: config.MONGO_URL,
     dbName: db.databaseName,
+    ...(options.allowDb && { allowDb: options.allowDb }),
   });
   await checkDatabase(raw.tenants, db.databaseName, options.shared ?? false);
   await ensureCollections(db, raw.specs);

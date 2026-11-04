@@ -19,7 +19,6 @@ import {
   type Visit,
 } from "./rules";
 
-const LIMIT = 50;
 const SEARCHES = 60;
 const SEARCH_WINDOW_MS = 10 * 60 * 1000;
 
@@ -33,23 +32,34 @@ type Row = WithId<
 export async function listCustomers(
   auth: Auth,
   tenant: Pick<TenantDoc, "currency">,
-  q?: string,
+  {
+    q,
+    page = 1,
+    pageSize = 50,
+  }: { q?: string | undefined; page?: number; pageSize?: number } = {},
   now = new Date(),
 ) {
-  if (!(await hit(`customers:${auth.userId}`, SEARCHES, SEARCH_WINDOW_MS))) {
+  // Only text searches count (they scan names and emails); paging through the list doesn't.
+  if (
+    q &&
+    !(await hit(`customers:${auth.userId}`, SEARCHES, SEARCH_WINDOW_MS))
+  ) {
     throw new AppError(429, "RATE_LIMITED", "Too many searches, try later");
   }
   const t = forTenant(auth.tenantId);
   const branches = visibleBranchIds(auth);
   const scope = branches && (await customersOf(t, branches));
+  const filter = {
+    ...customerFilter(q),
+    ...(scope && { _id: { $in: scope } }),
+  };
+  const total = await t.users.countDocuments(filter);
   const rows = await collect(
     t.users
-      .find({
-        ...customerFilter(q),
-        ...(scope && { _id: { $in: scope } }),
-      })
-      .sort({ createdAt: -1 })
-      .limit(LIMIT)
+      .find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
       .project<Row>({
         name: 1,
         phone: 1,
@@ -78,6 +88,9 @@ export async function listCustomers(
   }
   return {
     currency: tenant.currency,
+    total,
+    page,
+    pageSize,
     customers: rows.map((c) => present(c, tallies.get(c._id.toHexString()))),
   };
 }

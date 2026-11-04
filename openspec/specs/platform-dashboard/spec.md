@@ -37,6 +37,13 @@ Un pago SHALL liquidar cortes completados enteros de un mismo barbero; su import
 - **WHEN** se paga un corte ya incluido en un pago anterior
 - **THEN** la respuesta es 409 `ALREADY_PAID` y no se crea ningún pago
 
+### Requirement: Historial de pagos de la barbería
+El owner y el admin SHALL ver los pagos a barberos de su barbería hechos en un rango de días locales (`GET /v1/earnings/payouts?from=&to=`, máximo 366 días; el día de cada pago es el de la zona de la sucursal del barbero), en `rows`, del más nuevo al más viejo: barbero, sucursal, importe, moneda, cuántos cortes liquida, referencia si la tiene y cuándo se pagó. La barbería sale siempre de la sesión; un manager recibe 403.
+
+#### Scenario: Pago recién registrado
+- **WHEN** el dueño paga un corte de Mateo con 25 % sobre 300.00 y consulta el historial de ese día
+- **THEN** ve un pago de Mateo por 75.00 que liquida 1 corte
+
 ### Requirement: Trazabilidad por corte
 El detalle de un corte SHALL mostrar cliente, servicios, descuento, precio cobrado, pago, comisión (porcentaje, base, importe y si viene de la cita o de la configuración actual) y el pago al barbero con su fecha y referencia.
 

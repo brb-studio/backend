@@ -1,5 +1,6 @@
 import type { ObjectId } from "mongodb";
 import type { BarberDoc, Role, UserDoc } from "../../src/db/collections";
+import { BRAND } from "./brand";
 import { days } from "./catalog";
 import {
   between,
@@ -12,7 +13,7 @@ import {
   TENANT_ID,
 } from "./ids";
 
-export const DOMAIN = "montecobre.test";
+export const DOMAIN = `${BRAND.slug}.test`;
 const tenantId = TENANT_ID;
 
 type BarberSeed = {
@@ -88,8 +89,8 @@ export const BARBERS: BarberSeed[] = [
     branch: "polanco",
     specialty: { es: "Fundador", en: "Founder" },
     bio: {
-      es: "Fundó Montecobre; atiende martes a jueves.",
-      en: "Founded Montecobre; cuts Tuesday to Thursday.",
+      es: `Fundó ${BRAND.short}; atiende martes a jueves.`,
+      en: `Founded ${BRAND.short}; cuts Tuesday to Thursday.`,
     },
     hours: days([2, 3, 4], ["11:00", "14:00"], ["15:00", "18:00"]),
     services: [

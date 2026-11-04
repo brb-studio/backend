@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { ObjectId } from "mongodb";
+import { BRAND } from "./brand";
 
 /** The showcase barbershop: a fixed slug and a fixed seed, so every run builds the same shop. */
-export const SLUG = "montecobre";
+export const SLUG = BRAND.slug;
 export const SEED = 20261023;
 
 const digest = (key: string) =>

@@ -10,6 +10,8 @@ export type Target = {
   stripeKey?: string;
   mongoUrl: string;
   dbName: string;
+  /** One more database the caller vouches for (seed:qa writes the local dev database). */
+  allowDb?: string;
 };
 
 const LOCAL_HOST = /^(localhost|127\.0\.0\.1|\[::1\]|::1)(:\d+)?$/;
@@ -51,7 +53,7 @@ export function assertSafeTarget(target: Target) {
       `seed:showcase only writes to a local MongoDB, not ${hosts.join(",") || "?"}`,
     );
   }
-  if (!ALLOWED_DB.test(target.dbName)) {
+  if (!ALLOWED_DB.test(target.dbName) && target.dbName !== target.allowDb) {
     throw new GuardError(
       `seed:showcase only writes to brb-showcase, brb-showcase_e2e or a *_test database, not "${target.dbName}"`,
     );

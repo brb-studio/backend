@@ -12,6 +12,7 @@ import type {
 } from "../../src/db/collections";
 import { DEFAULT_BOOKING } from "../../src/features/tenancy/schemas";
 import { PLAN_LIMITS } from "../../src/features/tenancy/subscription";
+import { BRAND, placeOf } from "./brand";
 import { DAY, oid, SLUG, TENANT_ID } from "./ids";
 import { type ImageRefs, ref } from "./images";
 
@@ -51,11 +52,16 @@ function branches(now: Date, img: ImageRefs): BranchDoc[] {
       ...base,
       _id: oid("branch:polanco"),
       slug: "polanco",
-      name: "Montecobre Polanco",
-      address: ["Calle Cedro Azul 214", "Polanco, Ciudad de México"],
-      phone: "+525500000101",
+      ...placeOf(
+        "polanco",
+        {
+          name: `${BRAND.short} Polanco`,
+          address: ["Calle Cedro Azul 214", "Polanco, Ciudad de México"],
+          phone: "+525500000101",
+        },
+        "America/Mexico_City",
+      ),
       images: ref(img, "branch-centro.jpg", "cover.jpg"),
-      timeZone: "America/Mexico_City",
       hours: [
         ...days(MON_SAT, ["10:00", "20:00"]),
         ...days([0], ["11:00", "16:00"]),
@@ -65,22 +71,35 @@ function branches(now: Date, img: ImageRefs): BranchDoc[] {
       ...base,
       _id: oid("branch:providencia"),
       slug: "providencia",
-      name: "Montecobre Providencia",
-      address: ["Av. Los Almendros 1580", "Providencia, Guadalajara"],
-      phone: "+525500000102",
+      ...placeOf(
+        "providencia",
+        {
+          name: `${BRAND.short} Providencia`,
+          address: ["Av. Los Almendros 1580", "Providencia, Guadalajara"],
+          phone: "+525500000102",
+        },
+        "America/Mexico_City",
+      ),
       images: ref(img, "branch-norte.jpg"),
-      timeZone: "America/Mexico_City",
       hours: days([2, 3, 4, 5, 6, 0], ["10:00", "20:00"]),
     },
     {
       ...base,
       _id: oid("branch:sanpedro"),
       slug: "sanpedro",
-      name: "Montecobre San Pedro",
-      address: ["Calzada del Roble 402", "Del Valle, San Pedro Garza García"],
-      phone: "+525500000103",
+      ...placeOf(
+        "sanpedro",
+        {
+          name: `${BRAND.short} San Pedro`,
+          address: [
+            "Calzada del Roble 402",
+            "Del Valle, San Pedro Garza García",
+          ],
+          phone: "+525500000103",
+        },
+        "America/Monterrey",
+      ),
       images: ref(img, "cover.jpg"),
-      timeZone: "America/Monterrey",
       hours: [
         ...days([1, 2, 3, 4, 5], ["09:00", "19:00"]),
         ...days([6], ["09:00", "14:00"], ["15:00", "19:00"]),
@@ -222,7 +241,7 @@ const PACKAGES: [string, number, Localized, string[], Localized][] = [
   [
     "ritual-montecobre",
     99_000,
-    { es: "Ritual Montecobre", en: "Montecobre ritual" },
+    { es: `Ritual ${BRAND.short}`, en: `${BRAND.short} ritual` },
     ["corte-signature", "barba-ritual", "facial-carbon"],
     {
       es: "Corte, barba y facial: la experiencia completa.",
@@ -321,7 +340,7 @@ const PRODUCTS: [string, number, Localized, string, Partial<ProductDoc>?][] = [
   [
     "kit-regalo",
     129_000,
-    { es: "Kit regalo Montecobre", en: "Montecobre gift kit" },
+    { es: `Kit regalo ${BRAND.short}`, en: `${BRAND.short} gift kit` },
     "Regalo",
   ],
 ];
@@ -458,7 +477,7 @@ export function buildCatalog(now: Date, img: ImageRefs): Catalog {
     tenant: {
       _id: TENANT_ID,
       slug: SLUG,
-      name: "Montecobre Barber Co.",
+      name: BRAND.name,
       currency: "MXN",
       locales: ["es", "en"],
       defaultLocale: "es",
