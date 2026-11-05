@@ -2,8 +2,10 @@ import {
   type AppointmentDoc,
   type COUNTER_METHODS,
   forTenant,
+  transaction,
 } from "../../db/scoped";
 import { AppError, type Auth } from "../../shared/http";
+import { counterEntry } from "../money/rules";
 import { resolveCommission } from "../platform/commission";
 import { dueAtCounter } from "./counter";
 
@@ -37,29 +39,33 @@ export async function closeAppointment(
     { ...appointment, status },
     barber?.commissionBps,
   );
-  const result = await t.appointments.updateOne(
-    { _id: appointment._id, status: "confirmed" },
-    {
-      $set: {
-        status,
-        ...(commission && {
-          commission: {
-            bps: commission.bps,
-            amountMinor: commission.amountMinor,
-          },
-        }),
-        ...(due > 0 &&
-          paidWith && {
-            counter: {
-              method: paidWith,
-              amountMinor: due,
-              receivedBy: auth.userId,
-              at: now,
+  const counter =
+    due > 0 && paidWith
+      ? { method: paidWith, amountMinor: due, receivedBy: auth.userId, at: now }
+      : undefined;
+  await transaction(async (session) => {
+    const result = await t.appointments.updateOne(
+      { _id: appointment._id, status: "confirmed" },
+      {
+        $set: {
+          status,
+          ...(commission && {
+            commission: {
+              bps: commission.bps,
+              amountMinor: commission.amountMinor,
             },
           }),
-        updatedAt: now,
+          ...(counter && { counter }),
+          updatedAt: now,
+        },
       },
-    },
-  );
-  if (result.modifiedCount === 0) throw notConfirmed();
+      { session },
+    );
+    if (result.modifiedCount === 0) throw notConfirmed();
+    if (counter) {
+      await t.ledgerEntries.insertOne(counterEntry(appointment, counter), {
+        session,
+      });
+    }
+  });
 }

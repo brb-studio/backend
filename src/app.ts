@@ -31,6 +31,7 @@ import {
 import { customerRoutes } from "./features/customers/routes";
 import { invoiceRoutes, myInvoiceRoutes } from "./features/fiscal/routes";
 import { imageRoutes, publicImageRoutes } from "./features/images/routes";
+import { moneyRoutes } from "./features/money/routes";
 import { notificationRoutes } from "./features/notifications/routes";
 import {
   paymentPublicRoutes,
@@ -159,6 +160,7 @@ export const app = new Hono<Env>()
   .route("/v1/customers", customerRoutes)
   .route("/v1/cash", cashRoutes)
   .route("/v1/earnings", earningsRoutes)
+  .route("/v1/money", moneyRoutes)
   .route("/v1/promotions", promotionRoutes)
   .route("/v1/notifications", notificationRoutes)
   .route("/v1/images", imageRoutes)

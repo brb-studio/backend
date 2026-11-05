@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
-import { appointments, tenants } from "../src/db/collections";
+import { appointments, ledgerEntries, tenants } from "../src/db/collections";
 import { api, createUser, type Shop } from "./helpers";
 import { type FakeStripe, fakeStripe, stripeShop } from "./stripe-fake";
 import { at, type Booked, paymentFlow } from "./stripe-flow";
@@ -67,6 +67,17 @@ describe("refunds", () => {
       status: "paid",
       refundedMinor: 30_000 - FEE,
     });
+    const entries = await ledgerEntries
+      .find({ appointmentId: new ObjectId(booked.id) })
+      .sort({ at: 1, _id: 1 })
+      .toArray();
+    expect(
+      entries.map((e) => [e.type, e.direction, e.method, e.amountMinor]),
+    ).toEqual([
+      ["service_payment", "in", "card", 30_000],
+      ["online_fee", "out", "card", FEE],
+      ["refund", "out", "card", 30_000 - FEE],
+    ]);
   });
 
   test("the barbershop cancelling returns the whole payment, even at the last minute", async () => {

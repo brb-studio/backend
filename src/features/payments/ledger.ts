@@ -5,6 +5,7 @@ import {
   type TenantDoc,
   transaction,
 } from "../../db/scoped";
+import { onlineEntry, paymentEntry } from "../money/rules";
 import {
   notifyBarber,
   notifyCustomer,
@@ -46,6 +47,29 @@ export async function settlePaid(
       { session },
     );
     if (paid.matchedCount === 0) return undefined;
+    const visit = await t.appointments.findOne(
+      { _id: payment.appointmentId },
+      { session },
+    );
+    if (visit) {
+      await t.ledgerEntries.insertOne(paymentEntry(visit, payment, now), {
+        session,
+      });
+      const fee = payment.stripe?.applicationFeeMinor ?? 0;
+      if (fee > 0) {
+        await t.ledgerEntries.insertOne(
+          onlineEntry(
+            visit,
+            payment,
+            now,
+            "online_fee",
+            fee,
+            `fee:${payment._id.toHexString()}`,
+          ),
+          { session },
+        );
+      }
+    }
     const confirmed = await t.appointments.findOneAndUpdate(
       {
         _id: payment.appointmentId,
@@ -113,7 +137,7 @@ export async function recordRefund(
   const full = refundedMinor >= payment.amountMinor;
   const status = full ? "refunded" : payment.status;
   await transaction(async (session) => {
-    const changed = await t.payments.updateOne(
+    const before = await t.payments.findOneAndUpdate(
       {
         _id: payment._id,
         status: { $in: ["paid", "disputed", "refunded"] },
@@ -129,10 +153,10 @@ export async function recordRefund(
         },
         $push: { history: { status, at: now, note, ...(by && { by }) } },
       },
-      { session },
+      { session, returnDocument: "before" },
     );
-    if (changed.matchedCount === 0) return;
-    await t.appointments.updateOne(
+    if (!before) return;
+    const visit = await t.appointments.findOneAndUpdate(
       { _id: payment.appointmentId, "payment.paymentId": payment._id },
       {
         $set: {
@@ -143,6 +167,21 @@ export async function recordRefund(
       },
       { session },
     );
+    const amount = refundedMinor - (before.stripe?.refundedMinor ?? 0);
+    if (visit && amount > 0) {
+      await t.ledgerEntries.insertOne(
+        onlineEntry(
+          visit,
+          payment,
+          now,
+          "refund",
+          amount,
+          `refund:${payment._id.toHexString()}:${refundedMinor}`,
+          by ? { recordedBy: by } : {},
+        ),
+        { session },
+      );
+    }
   });
 }
 
@@ -150,6 +189,7 @@ export async function recordDispute(
   tenant: TenantDoc,
   payment: PaymentDoc,
   disputeId: string,
+  amountMinor: number,
 ) {
   const t = forTenant(tenant._id);
   const now = new Date();
@@ -169,6 +209,19 @@ export async function recordDispute(
       { session, returnDocument: "after" },
     );
     if (!appointment) return [];
+    if (amountMinor > 0) {
+      await t.ledgerEntries.insertOne(
+        onlineEntry(
+          appointment,
+          payment,
+          now,
+          "chargeback",
+          amountMinor,
+          `dispute:${disputeId}`,
+        ),
+        { session },
+      );
+    }
     const branch = await t.branches.findOne(
       { _id: appointment.branchId },
       { session },

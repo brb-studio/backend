@@ -1,6 +1,7 @@
 import type { Binary, ObjectId } from "mongodb";
 import { billingSpecs } from "./billing";
 import { db } from "./client";
+import { ledgerSpecs } from "./ledger";
 import {
   APPOINTMENT_PAYMENT_STATUSES,
   PAYMENT_KINDS,
@@ -23,6 +24,7 @@ import {
 } from "./validators";
 
 export * from "./billing";
+export * from "./ledger";
 export * from "./payments";
 export * from "./promotions";
 
@@ -1772,6 +1774,7 @@ export const specs: CollectionSpec[] = [
     ],
   },
   ...billingSpecs,
+  ...ledgerSpecs,
   ...paymentSpecs,
   ...promotionSpecs,
 ];

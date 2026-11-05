@@ -3,8 +3,7 @@ import {
   type AppointmentDoc,
   type BranchDoc,
   forTenant,
-  type PaymentDoc,
-  type ProductOrderDoc,
+  type LedgerEntryDoc,
   type TenantDoc,
   type UserDoc,
 } from "../../db/scoped";
@@ -13,33 +12,16 @@ import { AppError, type Auth } from "../../shared/http";
 import { localDate } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
 import { dueAtCounter } from "../booking/counter";
-import { inMinor, type Movement, productMethod, summarize } from "./rules";
+import { tally } from "../money/rules";
+import { inMinor, type Movement, summarize } from "./rules";
 
 const DAY = 864e5;
-const LATE_DAYS = 7;
+const MAX_ENTRIES = 2_000;
 const hex = (id: ObjectId) => id.toHexString();
 
 type Cut = Pick<
   AppointmentDoc,
-  | "_id"
-  | "customerId"
-  | "startAt"
-  | "timeZone"
-  | "totalMinor"
-  | "payment"
-  | "counter"
->;
-type Transfer = Pick<
-  PaymentDoc,
-  "appointmentId" | "amountMinor" | "reference" | "resolvedAt" | "resolvedBy"
->;
-type Visit = Pick<
-  AppointmentDoc,
-  "_id" | "customerId" | "startAt" | "timeZone"
->;
-type Sale = Pick<
-  ProductOrderDoc,
-  "_id" | "branchId" | "customerId" | "totalMinor" | "payment"
+  "_id" | "timeZone" | "startAt" | "totalMinor" | "payment" | "counter"
 >;
 
 export async function cashDay(
@@ -55,88 +37,13 @@ export async function cashDay(
   const branchIds = branchId ? [branchId] : visible;
   const inBranches = branchIds ? { branchId: { $in: branchIds } } : {};
   const t = forTenant(tenant._id);
-  const start = Date.parse(`${date}T00:00:00Z`);
-  const end = new Date(start + 2 * DAY);
-  const movements: Movement[] = [];
-  let unrecorded = 0;
 
-  const cuts = t.appointments
-    .find({
-      ...inBranches,
-      status: "completed",
-      startAt: { $gte: new Date(start - LATE_DAYS * DAY), $lt: end },
-    })
-    .project<Cut>({
-      customerId: 1,
-      startAt: 1,
-      timeZone: 1,
-      totalMinor: 1,
-      payment: 1,
-      counter: 1,
-    });
-  for await (const a of cuts) {
-    if (a.counter) {
-      if (localDate(a.counter.at, a.timeZone) !== date) continue;
-      movements.push({
-        kind: "cut",
-        source: "counter",
-        method: a.counter.method,
-        amountMinor: a.counter.amountMinor,
-        receivedBy: hex(a.counter.receivedBy),
-        customerId: hex(a.customerId),
-        at: a.counter.at,
-        timeZone: a.timeZone,
-      });
-    } else if (
-      localDate(a.startAt, a.timeZone) === date &&
-      dueAtCounter(a) > 0
-    ) {
-      unrecorded++;
-    }
-  }
-
-  const transfers = await collect(
-    t.payments
-      .find({
-        method: "spei",
-        status: "paid",
-        resolvedAt: { $gte: new Date(start - DAY), $lt: end },
-      })
-      .project<Transfer>({
-        appointmentId: 1,
-        amountMinor: 1,
-        reference: 1,
-        resolvedAt: 1,
-        resolvedBy: 1,
-      }),
+  const entries = await collect(
+    t.ledgerEntries
+      .find({ ...inBranches, currency: tenant.currency, localDate: date })
+      .sort({ at: 1, _id: 1 })
+      .limit(MAX_ENTRIES),
   );
-  const visits = await mapBy(
-    t.appointments
-      .find({
-        ...inBranches,
-        _id: { $in: transfers.map((p) => p.appointmentId) },
-      })
-      .project<Visit>({ customerId: 1, startAt: 1, timeZone: 1 }),
-    (a) => hex(a._id),
-  );
-  for (const p of transfers) {
-    const visit = visits.get(hex(p.appointmentId));
-    if (!visit || !p.resolvedAt || !p.resolvedBy) continue;
-    if (localDate(p.resolvedAt, visit.timeZone) !== date) continue;
-    movements.push({
-      kind: "cut",
-      source: "transfer",
-      method: "transfer",
-      amountMinor: p.amountMinor,
-      receivedBy: hex(p.resolvedBy),
-      customerId: hex(visit.customerId),
-      at: p.resolvedAt,
-      timeZone: visit.timeZone,
-      ...(p.reference && { reference: p.reference }),
-      visitAt: visit.startAt,
-    });
-  }
-
   const zones = await mapBy(
     t.branches
       .find(branchIds ? { _id: { $in: branchIds } } : {})
@@ -144,50 +51,132 @@ export async function cashDay(
     (b) => hex(b._id),
     (b) => b.timeZone,
   );
-  const sales = t.productOrders
+  const zoneOf = (id: ObjectId) => zones.get(hex(id)) ?? "UTC";
+
+  const start = Date.parse(`${date}T00:00:00Z`);
+  const pending = { count: 0, amountMinor: 0 };
+  const cuts = t.appointments
     .find({
       ...inBranches,
-      status: "delivered",
-      "payment.at": { $gte: new Date(start - DAY), $lt: end },
+      status: "completed",
+      counter: { $exists: false },
+      startAt: { $gte: new Date(start - DAY), $lt: new Date(start + 2 * DAY) },
     })
-    .project<Sale>({ branchId: 1, customerId: 1, totalMinor: 1, payment: 1 });
-  for await (const o of sales) {
-    const zone = zones.get(hex(o.branchId)) ?? "UTC";
-    if (!o.payment || localDate(o.payment.at, zone) !== date) continue;
-    movements.push({
-      kind: "product",
-      source: "counter",
-      method: productMethod(o.payment.method),
-      amountMinor: o.totalMinor,
-      receivedBy: hex(o.payment.receivedBy),
-      customerId: hex(o.customerId),
-      at: o.payment.at,
-      timeZone: zone,
+    .project<Cut>({
+      timeZone: 1,
+      startAt: 1,
+      totalMinor: 1,
+      payment: 1,
+      counter: 1,
     });
+  for await (const a of cuts) {
+    const due = dueAtCounter(a);
+    if (due > 0 && localDate(a.startAt, a.timeZone) === date) {
+      pending.count++;
+      pending.amountMinor += due;
+    }
   }
-  movements.sort((a, b) => a.at.getTime() - b.at.getTime());
 
-  const ids = [
-    ...new Set(movements.flatMap((m) => [m.receivedBy, m.customerId])),
+  const visitIds = entries.flatMap((e) =>
+    e.appointmentId ? [e.appointmentId] : [],
+  );
+  const visits = await mapBy(
+    t.appointments
+      .find({ _id: { $in: visitIds } })
+      .project<Pick<AppointmentDoc, "_id" | "startAt">>({ startAt: 1 }),
+    (a) => hex(a._id),
+    (a) => a.startAt,
+  );
+  const people = [
+    ...new Set(
+      entries.flatMap((e) =>
+        [e.customerId, e.recordedBy].flatMap((id) => (id ? [hex(id)] : [])),
+      ),
+    ),
   ].map((id) => new ObjectId(id));
   const names = await mapBy(
     t.users
-      .find({ _id: { $in: ids } })
+      .find({ _id: { $in: people } })
       .project<Pick<UserDoc, "_id" | "name">>({ name: 1 }),
     (u) => hex(u._id),
     (u) => u.name,
   );
-  const { totals, people } = summarize(movements);
+  const nameOf = (id?: ObjectId) => (id ? (names.get(hex(id)) ?? "") : "");
+  const reversed = new Set(
+    await collect(
+      t.ledgerEntries
+        .find({ reverses: { $in: entries.map((e) => e._id) } })
+        .project<Pick<LedgerEntryDoc, "_id" | "reverses">>({ reverses: 1 }),
+      (e) => (e.reverses ? hex(e.reverses) : ""),
+    ),
+  );
+
+  const totals = tally([], "day");
+  const legacy: Movement[] = [];
+  for (const e of entries) {
+    totals.push(e);
+    if (e.direction === "in" && e.method && e.recordedBy) {
+      legacy.push({
+        kind: e.type === "product_sale" ? "product" : "cut",
+        source: e.channel === "spei" ? "transfer" : "counter",
+        method: e.method,
+        amountMinor: e.amountMinor,
+        receivedBy: hex(e.recordedBy),
+        customerId: e.customerId ? hex(e.customerId) : "",
+        at: e.at,
+        timeZone: zoneOf(e.branchId),
+        ...(e.reference && { reference: e.reference }),
+        ...(e.channel === "spei" &&
+          e.appointmentId && { visitAt: visits.get(hex(e.appointmentId)) }),
+      });
+    }
+  }
+  const { inMinor: inTotal, outMinor, netMinor, byMethod } = totals.result();
+  const collected = summarize(legacy);
+
   return {
     currency: tenant.currency,
     date,
-    totals: inMinor(totals),
-    people: [...people].map(([id, sums]) => ({
+    inMinor: inTotal,
+    outMinor,
+    netMinor,
+    byMethod,
+    pending,
+    entries: entries.map((e) => {
+      const visitAt = e.appointmentId
+        ? visits.get(hex(e.appointmentId))
+        : undefined;
+      return {
+        id: hex(e._id),
+        at: e.at,
+        timeZone: zoneOf(e.branchId),
+        direction: e.direction,
+        type: e.type,
+        amountMinor: e.amountMinor,
+        concept: e.concept,
+        ...(e.method && { method: e.method }),
+        ...(e.channel && { channel: e.channel }),
+        ...(e.customerId && { customer: nameOf(e.customerId) }),
+        ...(e.recordedBy && { recordedBy: nameOf(e.recordedBy) }),
+        ...(e.reference && { reference: e.reference }),
+        ...(e.appointmentId && { appointmentId: hex(e.appointmentId) }),
+        ...(visitAt && { visitAt }),
+        ...(e.productOrderId && { productOrderId: hex(e.productOrderId) }),
+        ...(e.payoutId && { payoutId: hex(e.payoutId) }),
+        ...(e.paymentId && { paymentId: hex(e.paymentId) }),
+        ...(e.reverses && { reverses: hex(e.reverses) }),
+        ...(reversed.has(hex(e._id)) && { reversed: true }),
+        ...(e.note && { note: e.note }),
+        ...(e.approximate && { approximate: true }),
+      };
+    }),
+    totals: inMinor(collected.totals),
+    people: [...collected.people].map(([id, sums]) => ({
       id,
       name: names.get(id) ?? "",
       ...inMinor(sums),
     })),
-    movements: movements.map((m) => ({
+    movements: legacy.map((m) => ({
       kind: m.kind,
       source: m.source,
       method: m.method,
@@ -199,6 +188,6 @@ export async function cashDay(
       ...(m.reference && { reference: m.reference }),
       ...(m.visitAt && { visitAt: m.visitAt }),
     })),
-    unrecorded,
+    unrecorded: pending.count,
   };
 }

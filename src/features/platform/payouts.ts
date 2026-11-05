@@ -9,6 +9,7 @@ import {
 import { collect, mapBy } from "../../shared/cursor";
 import { AppError, isDuplicate } from "../../shared/http";
 import { localDate } from "../../shared/time";
+import { payoutEntry } from "../money/rules";
 import { resolveCommission } from "./commission";
 
 export async function setCommissionRate(
@@ -121,6 +122,17 @@ export async function createPayout(
       // The unique index on appointmentIds rejects a second payout for the same appointment.
       await platform.payouts.insertOne(payout, { session });
       await platform.appointments.bulkWrite(marks, { session, ordered: false });
+      const branch = await platform.branches.findOne(
+        { _id: barber.branchId, tenantId: barber.tenantId },
+        { session, projection: { timeZone: 1 } },
+      );
+      const entry = payoutEntry(payout, barber, branch?.timeZone ?? "UTC");
+      if (entry) {
+        await platform.ledgerEntries.insertOne(
+          { ...entry, tenantId: barber.tenantId },
+          { session },
+        );
+      }
       return {
         id: payout._id.toHexString(),
         amountMinor,

@@ -157,14 +157,21 @@ El saldo pendiente de la barbería SHALL cobrarse sumándolo al `application_fee
 - **THEN** la plataforma retiene 16.01 + 5.00 y el saldo pendiente queda en 0
 
 ### Requirement: Reembolso manual
-Owner y admin SHALL reembolsar todo o parte con `POST /v1/payments/appointments/:id/refund` (`{ amountMinor? }`, por defecto lo que queda). Más de lo pagado es 422 `REFUND_TOO_LARGE`; un pago no pagado, 409 `NOT_REFUNDABLE`. Es un reembolso de la barbería: lo que su transferencia no cubra MUST sumarse a su saldo pendiente. El total reembolsado sigue a Stripe (`charge.refunded`), incluidos los hechos en su panel.
+Owner y admin SHALL reembolsar todo o parte con `POST /v1/payments/appointments/:id/refund` (`{ amountMinor? }`, por defecto lo que queda). Más de lo pagado es 422 `REFUND_TOO_LARGE`; un pago no pagado, 409 `NOT_REFUNDABLE`. Es un reembolso de la barbería: lo que su transferencia no cubra MUST sumarse a su saldo pendiente. El total reembolsado sigue a Stripe (`charge.refunded`), incluidos los hechos en su panel. Cada aumento del total reembolsado SHALL anotarse en el libro de movimientos como un `refund` por la diferencia, una sola vez aunque Stripe repita el evento.
 
 #### Scenario: Reembolso parcial
 - **WHEN** el owner reembolsa 100.00 de un pago de 300.00
 - **THEN** se le revierten 100.00, el pago sigue `paid` y el saldo pendiente no cambia
 
+### Requirement: Devolución de transferencias SPEI
+`POST /v1/payments/appointments/:id/refund` (`{ amountMinor?, reference? }`, owner y admin) sobre una cita pagada por SPEI manual SHALL registrar que la barbería regresó el dinero por fuera de la plataforma: todo o parte de lo que queda, sumado en `payment.refundedMinor` de la cita, con su historial en el pago y un `refund` en el libro de movimientos (canal `spei`, con quién lo registró y la clave de rastreo si se dio). Al devolverse todo, el pago y la cita quedan `refunded`. Más de lo que queda es 422 `REFUND_TOO_LARGE`; un pago no pagado o ya devuelto, 409 `NOT_REFUNDABLE`. No se llama a ningún banco ni a Stripe.
+
+#### Scenario: Devolución parcial y luego total
+- **WHEN** el owner devuelve 100.00 de una transferencia de 300.00 con clave DEV001 y luego el resto
+- **THEN** el libro tiene dos `refund` de 10000 y 20000, y el pago queda `refunded`
+
 ### Requirement: Disputas
-Con `charge.dispute.created`, el pago y el ticket de la cita SHALL quedar `disputed` y cada owner y admin activo MUST recibir un aviso `payment.disputed`, en una transacción.
+Con `charge.dispute.created`, el pago y el ticket de la cita SHALL quedar `disputed`, el monto disputado MUST anotarse en el libro de movimientos como `chargeback` y cada owner y admin activo MUST recibir un aviso `payment.disputed`, en una transacción.
 
 #### Scenario: Contracargo
 - **WHEN** el tarjetahabiente abre una disputa

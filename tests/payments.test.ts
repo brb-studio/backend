@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
-import { appointments, payments } from "../src/db/collections";
+import { appointments, ledgerEntries, payments } from "../src/db/collections";
 import {
   api,
   bookingShop,
@@ -306,6 +306,17 @@ describe("confirming and rejecting", () => {
     const doc = await payments.findOne({ _id: new ObjectId(id) });
     expect(doc?.resolvedBy?.equals(shop.owner.user._id)).toBe(true);
     expect(doc?.history.map((h) => h.status)).toEqual(["pending", "paid"]);
+    expect(
+      await ledgerEntries.findOne({ paymentId: new ObjectId(id) }),
+    ).toMatchObject({
+      direction: "in",
+      type: "service_payment",
+      method: "transfer",
+      channel: "spei",
+      amountMinor: 30_000,
+      reference: "MBAN01ABC",
+      recordedBy: shop.owner.user._id,
+    });
 
     // Paying again is refused; nothing else is written.
     const dup = await confirm(shop, id, { receivedMinor: 30_000 });

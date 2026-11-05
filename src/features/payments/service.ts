@@ -12,6 +12,7 @@ import {
 } from "../../db/scoped";
 import { collect, mapBy } from "../../shared/cursor";
 import { AppError, isDuplicate } from "../../shared/http";
+import { paymentEntry } from "../money/rules";
 import {
   notifyCustomer,
   notifyOwners,
@@ -302,6 +303,12 @@ async function resolve(
       },
       { session },
     );
+    if (status === "paid") {
+      await t.ledgerEntries.insertOne(
+        paymentEntry(appointment, { ...payment, ...fields }, now, staffId),
+        { session },
+      );
+    }
     return notifyCustomer(
       t,
       status === "paid" ? "customer.paid" : "customer.payment_rejected",

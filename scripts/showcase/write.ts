@@ -3,6 +3,7 @@ import { config } from "../../src/config";
 import { client, db } from "../../src/db/client";
 import * as raw from "../../src/db/collections";
 import { ensureCollections } from "../../src/db/setup";
+import { migrateLedger } from "../migrate-ledger";
 import {
   buildNotifications,
   buildPayouts,
@@ -169,6 +170,7 @@ export async function seedShowcase(
         // Time-relative first, so nothing points at a pruned document and live slots never clash.
         // They are then written back with the same upsert (into emptied collections, i.e. inserts).
         await o(raw.payouts).wipe();
+        await o(raw.ledgerEntries).wipe();
         await o(raw.notifications).wipe();
         await o(raw.waitlist).wipe();
         await o(raw.productOrders).wipe();
@@ -203,5 +205,6 @@ export async function seedShowcase(
       { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } },
     ),
   );
+  await migrateLedger(true, [TENANT_ID]);
   return { now, counts: await countShowcase(), shop };
 }

@@ -19,6 +19,10 @@ export {
   CONNECT_STATUSES,
   COUNTER_METHODS,
   IMAGE_KINDS,
+  LEDGER_CHANNELS,
+  LEDGER_DIRECTIONS,
+  LEDGER_METHODS,
+  LEDGER_TYPES,
   LOCALES,
   PAYMENT_KINDS,
   PAYMENT_METHODS,
@@ -94,6 +98,7 @@ export const forTenant = (tenantId: ObjectId) => ({
   productOrders: scope(raw.productOrders, tenantId),
   productStock: scope(raw.productStock, tenantId),
   invoiceRequests: scope(raw.invoiceRequests, tenantId),
+  ledgerEntries: scope(raw.ledgerEntries, tenantId),
 });
 
 export type TenantDb = ReturnType<typeof forTenant>;
@@ -113,6 +118,7 @@ export const platform = {
   staff: raw.platformStaff,
   staffSessions: raw.platformSessions,
   payouts: raw.payouts,
+  ledgerEntries: raw.ledgerEntries,
   ownerProject: raw.ownerProject,
   subscriptionPayments: raw.subscriptionPayments,
 };

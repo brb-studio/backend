@@ -129,13 +129,14 @@ export const paymentStaffRoutes = new Hono<Env>()
     c.json(await saveDeposit(c.var.tenant, await readJson(c, depositBody))),
   )
   .post("/appointments/:id/refund", requireActiveSubscription, async (c) => {
-    const { amountMinor } = await readJson(c, refundBody);
+    const { amountMinor, reference } = await readJson(c, refundBody);
     return c.json(
       await refundAppointment(
         c.var.tenant,
         parseId(c.req.param("id")),
         authOf(c).userId,
         amountMinor,
+        reference,
       ),
     );
   })

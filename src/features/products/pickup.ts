@@ -3,10 +3,12 @@ import {
   forTenant,
   type ProductOrderDoc,
   type TenantDoc,
+  transaction,
 } from "../../db/scoped";
 import { collect } from "../../shared/cursor";
 import { AppError, type Auth } from "../../shared/http";
 import { visibleBranchIds } from "../auth/policy";
+import { saleEntry } from "../money/rules";
 import { type OrderContext, orderView, releaseOrder } from "./orders";
 import { orderIdOf } from "./token";
 
@@ -87,19 +89,32 @@ export async function deliverOrder(
 ) {
   const t = forTenant(tenant._id);
   const now = new Date();
-  const done = await t.productOrders.findOneAndUpdate(
-    { $and: [{ _id: id, status: "reserved" }, visibleTo(auth)] },
-    {
-      $set: {
-        status: "delivered",
-        payment: { method, receivedBy: auth.userId, at: now },
-        closedAt: now,
-        closedBy: auth.userId,
-        updatedAt: now,
+  const payment = { method, receivedBy: auth.userId, at: now };
+  const done = await transaction(async (session) => {
+    const order = await t.productOrders.findOneAndUpdate(
+      { $and: [{ _id: id, status: "reserved" }, visibleTo(auth)] },
+      {
+        $set: {
+          status: "delivered",
+          payment,
+          closedAt: now,
+          closedBy: auth.userId,
+          updatedAt: now,
+        },
       },
-    },
-    { returnDocument: "after" },
-  );
+      { session, returnDocument: "after" },
+    );
+    if (!order) return null;
+    const branch = await t.branches.findOne(
+      { _id: order.branchId },
+      { session, projection: { timeZone: 1 } },
+    );
+    await t.ledgerEntries.insertOne(
+      saleEntry(order, payment, branch?.timeZone ?? "UTC"),
+      { session },
+    );
+    return order;
+  });
   if (!done) {
     await findOrder(tenant, auth, id);
     throw new AppError(

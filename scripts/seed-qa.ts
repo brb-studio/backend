@@ -17,6 +17,7 @@ import { config } from "../src/config";
 import { client, db } from "../src/db/client";
 import * as raw from "../src/db/collections";
 import { ensureCollections } from "../src/db/setup";
+import { migrateLedger } from "./migrate-ledger";
 import { buildElite } from "./qa/elite";
 import { buildGhost } from "./qa/ghost";
 
@@ -116,6 +117,7 @@ try {
       await raw.appointments.insertMany(elite.appointments, opts);
     }),
   );
+  await migrateLedger(true, [elite.tenant._id]);
   console.log(
     `  Elite         ${elite.appointments.length} citas, ${elite.users.length} usuarios`,
   );

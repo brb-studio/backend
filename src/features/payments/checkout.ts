@@ -19,6 +19,7 @@ import {
   stripeFeeOf,
   unavailable,
 } from "./holds";
+import { returnTransfer } from "./returns";
 import { customerRefundable, onlineOffer, transferFits } from "./rules";
 import {
   abandon,
@@ -288,10 +289,14 @@ export async function refundAppointment(
   appointmentId: ObjectId,
   by: ObjectId,
   amountMinor?: number,
+  reference?: string,
 ) {
   const t = forTenant(tenant._id);
   const appointment = await t.appointments.findOne({ _id: appointmentId });
   if (!appointment) throw notFound();
+  if (appointment.payment?.provider === "spei") {
+    return returnTransfer(tenant, appointment, by, { amountMinor, reference });
+  }
   const payment = await currentPayment(t, appointment);
   const left = payment.amountMinor - (payment.stripe?.refundedMinor ?? 0);
   await refundPayment(tenant, payment, amountMinor ?? left, "refund", {

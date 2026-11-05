@@ -27,6 +27,7 @@ export const switchBody = z.strictObject({
 
 export const refundBody = z.strictObject({
   amountMinor: z.int().min(1).max(100_000_000).optional(),
+  reference: z.string().trim().min(1).max(120).optional(),
 });
 
 export const transferBody = z.strictObject({

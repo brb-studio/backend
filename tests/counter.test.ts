@@ -105,7 +105,9 @@ describe("paying at the counter", () => {
   });
 
   test("the day's cash report adds up methods, people and pickups; managers see their branch", async () => {
-    const { tenant, host, owner, branchId, asOwner } = await createShop();
+    const { tenant, host, owner, branchId, asOwner } = await createShop({
+      products: { enabled: true },
+    });
     const north = await addBranch(host, owner.token);
     const manager = await createUser(tenant, "manager", {
       name: "Lucía",
@@ -129,12 +131,13 @@ describe("paying at the counter", () => {
     await complete(asOwner, await visit(tenant, north, ana.user._id), "cash");
     await visit(tenant, branchId, ana.user._id, { status: "completed" });
     const now = new Date();
+    const orderId = new ObjectId();
     await productOrders.insertOne({
-      _id: new ObjectId(),
+      _id: orderId,
       tenantId: tenant._id,
       branchId: new ObjectId(branchId),
       customerId: ana.user._id,
-      status: "delivered",
+      status: "reserved",
       items: [
         {
           productId: new ObjectId(),
@@ -146,10 +149,17 @@ describe("paying at the counter", () => {
       currency: "MXN",
       totalMinor: 18_000,
       expiresAt: new Date(now.getTime() + 7 * 24 * HOUR),
-      payment: { method: "spei", receivedBy: manager.user._id, at: now },
       createdAt: now,
       updatedAt: now,
     });
+    expect(
+      (
+        await api("POST", `/v1/product-orders/${orderId}/deliver`, {
+          ...asManager,
+          body: { method: "spei" },
+        })
+      ).status,
+    ).toBe(200);
 
     const all = await api("GET", `/v1/cash?date=${today()}`, asOwner);
     expect(all.status).toBe(200);
@@ -157,7 +167,12 @@ describe("paying at the counter", () => {
       currency: "MXN",
       totals: { cashMinor: 60_000, cardMinor: 20_000, transferMinor: 18_000 },
       unrecorded: 1,
+      inMinor: 98_000,
+      outMinor: 0,
+      netMinor: 98_000,
+      pending: { count: 1, amountMinor: 30_000 },
     });
+    expect(all.body.entries).toHaveLength(4);
     expect(all.body.people).toEqual(
       expect.arrayContaining([
         {

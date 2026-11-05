@@ -391,5 +391,10 @@ export async function onDispute(dispute: unknown) {
   if (!parsed.success || !parsed.data.payment_intent) return;
   const found = await paymentOf(await fetchIntent(parsed.data.payment_intent));
   if (!found) return;
-  await recordDispute(found.tenant, found.payment, parsed.data.id);
+  await recordDispute(
+    found.tenant,
+    found.payment,
+    parsed.data.id,
+    parsed.data.amount,
+  );
 }
