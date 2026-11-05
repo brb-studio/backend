@@ -3,11 +3,12 @@ import {
   type AppointmentDoc,
   type BranchDoc,
   forTenant,
+  type PaymentDoc,
   type ProductOrderDoc,
   type TenantDoc,
   type UserDoc,
 } from "../../db/scoped";
-import { mapBy } from "../../shared/cursor";
+import { collect, mapBy } from "../../shared/cursor";
 import { AppError, type Auth } from "../../shared/http";
 import { localDate } from "../../shared/time";
 import { visibleBranchIds } from "../auth/policy";
@@ -27,6 +28,14 @@ type Cut = Pick<
   | "totalMinor"
   | "payment"
   | "counter"
+>;
+type Transfer = Pick<
+  PaymentDoc,
+  "appointmentId" | "amountMinor" | "reference" | "resolvedAt" | "resolvedBy"
+>;
+type Visit = Pick<
+  AppointmentDoc,
+  "_id" | "customerId" | "startAt" | "timeZone"
 >;
 type Sale = Pick<
   ProductOrderDoc,
@@ -70,6 +79,7 @@ export async function cashDay(
       if (localDate(a.counter.at, a.timeZone) !== date) continue;
       movements.push({
         kind: "cut",
+        source: "counter",
         method: a.counter.method,
         amountMinor: a.counter.amountMinor,
         receivedBy: hex(a.counter.receivedBy),
@@ -83,6 +93,48 @@ export async function cashDay(
     ) {
       unrecorded++;
     }
+  }
+
+  const transfers = await collect(
+    t.payments
+      .find({
+        method: "spei",
+        status: "paid",
+        resolvedAt: { $gte: new Date(start - DAY), $lt: end },
+      })
+      .project<Transfer>({
+        appointmentId: 1,
+        amountMinor: 1,
+        reference: 1,
+        resolvedAt: 1,
+        resolvedBy: 1,
+      }),
+  );
+  const visits = await mapBy(
+    t.appointments
+      .find({
+        ...inBranches,
+        _id: { $in: transfers.map((p) => p.appointmentId) },
+      })
+      .project<Visit>({ customerId: 1, startAt: 1, timeZone: 1 }),
+    (a) => hex(a._id),
+  );
+  for (const p of transfers) {
+    const visit = visits.get(hex(p.appointmentId));
+    if (!visit || !p.resolvedAt || !p.resolvedBy) continue;
+    if (localDate(p.resolvedAt, visit.timeZone) !== date) continue;
+    movements.push({
+      kind: "cut",
+      source: "transfer",
+      method: "transfer",
+      amountMinor: p.amountMinor,
+      receivedBy: hex(p.resolvedBy),
+      customerId: hex(visit.customerId),
+      at: p.resolvedAt,
+      timeZone: visit.timeZone,
+      ...(p.reference && { reference: p.reference }),
+      visitAt: visit.startAt,
+    });
   }
 
   const zones = await mapBy(
@@ -104,6 +156,7 @@ export async function cashDay(
     if (!o.payment || localDate(o.payment.at, zone) !== date) continue;
     movements.push({
       kind: "product",
+      source: "counter",
       method: productMethod(o.payment.method),
       amountMinor: o.totalMinor,
       receivedBy: hex(o.payment.receivedBy),
@@ -136,12 +189,15 @@ export async function cashDay(
     })),
     movements: movements.map((m) => ({
       kind: m.kind,
+      source: m.source,
       method: m.method,
       amountMinor: m.amountMinor,
       at: m.at,
       timeZone: m.timeZone,
       receivedBy: names.get(m.receivedBy) ?? "",
       customer: names.get(m.customerId) ?? "",
+      ...(m.reference && { reference: m.reference }),
+      ...(m.visitAt && { visitAt: m.visitAt }),
     })),
     unrecorded,
   };

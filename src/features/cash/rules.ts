@@ -4,12 +4,15 @@ export type CounterMethod = (typeof COUNTER_METHODS)[number];
 
 export type Movement = {
   kind: "cut" | "product";
+  source: "counter" | "transfer";
   method: CounterMethod;
   amountMinor: number;
   receivedBy: string;
   customerId: string;
   at: Date;
   timeZone: string;
+  reference?: string;
+  visitAt?: Date;
 };
 
 type ByMethod = Record<CounterMethod, number>;

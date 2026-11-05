@@ -457,3 +457,50 @@ describe("confirming and rejecting", () => {
     expect(res.body.error?.code).toBe("APPOINTMENT_NOT_PAYABLE");
   });
 });
+
+describe("cash", () => {
+  test("an accepted transfer counts on the day it was accepted, with who, when and its key", async () => {
+    const shop = await transferShop();
+    const { id } = await pending(shop, 1);
+    expect(
+      (
+        await confirm(shop, id, {
+          receivedMinor: 30_000,
+          reference: "MBAN01ABC",
+        })
+      ).status,
+    ).toBe(200);
+
+    const today = await api(
+      "GET",
+      `/v1/cash?date=${dayIn(shop.timeZone, 0)}`,
+      shop.asOwner,
+    );
+    expect(today.status).toBe(200);
+    expect(today.body.totals).toEqual({
+      cashMinor: 0,
+      cardMinor: 0,
+      transferMinor: 30_000,
+    });
+    expect<unknown>(today.body.movements).toEqual([
+      expect.objectContaining({
+        kind: "cut",
+        source: "transfer",
+        method: "transfer",
+        amountMinor: 30_000,
+        customer: "Ana López",
+        receivedBy: shop.owner.user.name,
+        reference: "MBAN01ABC",
+        visitAt: expect.any(String),
+      }),
+    ]);
+    expect(today.body.unrecorded).toBe(0);
+
+    const visitDay = await api(
+      "GET",
+      `/v1/cash?date=${dayIn(shop.timeZone, 1)}`,
+      shop.asOwner,
+    );
+    expect<unknown>(visitDay.body.totals).toMatchObject({ transferMinor: 0 });
+  });
+});

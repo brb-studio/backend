@@ -7,6 +7,7 @@ const move = (
   amountMinor: number,
 ): Movement => ({
   kind: "cut",
+  source: "counter",
   method,
   amountMinor,
   receivedBy,

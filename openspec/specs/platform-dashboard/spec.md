@@ -63,8 +63,13 @@ El owner y el admin SHALL ver lo que entró a su barbería en un rango de días 
 - **THEN** no ve nada de lo anterior
 
 ### Requirement: Corte de caja
-Owner, admin y manager SHALL ver la caja de un día local (`GET /v1/cash?date=&branchId=`): lo cobrado en mostrador por método (efectivo, tarjeta, transferencia), por persona que lo recibió y cada movimiento con su hora en la zona de su sucursal. Cuentan los cortes por la hora de su cobro en mostrador (aunque se completen hasta 7 días después de la cita) y los apartados entregados por la hora de su cobro (SPEI cuenta como transferencia). También SHALL decir cuántos cortes completados ese día tienen saldo sin cobro registrado. El manager solo ve su sucursal (otra, 404); owner y admin todas o una. Barberos y clientes reciben 403.
+Owner, admin y manager SHALL ver la caja de un día local (`GET /v1/cash?date=&branchId=`): lo cobrado en mostrador por método (efectivo, tarjeta, transferencia), por persona que lo recibió y cada movimiento con su hora en la zona de su sucursal. Cuentan los cortes por la hora de su cobro en mostrador (aunque se completen hasta 7 días después de la cita), los apartados entregados por la hora de su cobro (SPEI cuenta como transferencia) y las transferencias SPEI de citas confirmadas por el staff, por la hora en que se aceptaron en la zona de la sucursal de la cita, como transferencia recibida por quien la aceptó. Cada movimiento SHALL decir cliente, monto, hora, quién lo recibió y su origen (`counter` o `transfer`); las transferencias aceptadas también traen la clave de rastreo si se capturó y la fecha de la cita. Los pagos con Stripe no cuentan en la caja. También SHALL decir cuántos cortes completados ese día tienen saldo sin cobro registrado. El manager solo ve su sucursal (otra, 404); owner y admin todas o una. Barberos y clientes reciben 403.
 
 #### Scenario: Cierre del día
 - **WHEN** hoy se cobraron 300.00 en efectivo, 200.00 con tarjeta y se entregó un producto de 180.00 por SPEI
 - **THEN** la caja de hoy da efectivo 30000, tarjeta 20000 y transferencia 18000, con lo de cada persona
+
+#### Scenario: Transferencia aceptada antes de la cita
+- **WHEN** hoy el admin acepta una transferencia SPEI de 250.00 con clave de rastreo para una cita de mañana
+- **THEN** la caja de hoy suma 25000 en transferencia a nombre del admin, con el cliente, la hora en que se aceptó, la clave de rastreo y la fecha de la cita
+- **AND** la caja de mañana no la vuelve a contar
