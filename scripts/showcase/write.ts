@@ -2,8 +2,8 @@ import type { ClientSession, Collection, Filter, ObjectId } from "mongodb";
 import { config } from "../../src/config";
 import { client, db } from "../../src/db/client";
 import * as raw from "../../src/db/collections";
+import { migrateLedger } from "../../src/db/ledger-backfill";
 import { ensureCollections } from "../../src/db/setup";
-import { migrateLedger } from "../migrate-ledger";
 import {
   buildNotifications,
   buildPayouts,

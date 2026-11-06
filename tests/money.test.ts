@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { ObjectId } from "mongodb";
-import { migrateLedger } from "../scripts/migrate-ledger";
 import {
   type AppointmentDoc,
   appointments,
@@ -9,6 +8,7 @@ import {
   productOrders,
   type TenantDoc,
 } from "../src/db/collections";
+import { migrateLedger } from "../src/db/ledger-backfill";
 import {
   addBarber,
   addBranch,

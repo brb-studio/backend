@@ -2,7 +2,7 @@
 - [x] 1.1 Colección `ledgerEntries` con validador e índices.
 - [x] 1.2 Escritura en mostrador, SPEI, Stripe (pago, comisión, reembolso, disputa), productos y pagos a barberos.
 - [x] 1.3 `GET /v1/money/summary` y `GET /v1/money/movements`.
-- [x] 1.4 Migración idempotente `scripts/migrate-ledger.ts`.
+- [x] 1.4 Migración idempotente: corre sola una vez tras el deploy (`oneTimeJobs`, `src/db/ledger-backfill.ts`) o a mano con `scripts/migrate-ledger.ts`.
 - [x] 1.5 Pruebas: reglas puras, cada escritura, migración y suma de días = rango.
 
 ## 2. Caja en la web (fase 2)

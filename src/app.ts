@@ -5,6 +5,8 @@ import { requestId } from "hono/request-id";
 import { config } from "./config";
 import { db } from "./db/client";
 import { specs } from "./db/collections";
+import { migrateLedger } from "./db/ledger-backfill";
+import { runOnce } from "./db/once";
 import { ensureCollections } from "./db/setup";
 import { authenticate, authRoutes, userRoutes } from "./features/auth/routes";
 import {
@@ -85,11 +87,33 @@ const accessLog = createMiddleware<Env>(async (c, next) => {
 
 let setup: Promise<void> | undefined;
 
+async function afterDeploy() {
+  const job = "ledger-backfill-2026-11";
+  try {
+    if (await runOnce(job, () => migrateLedger(true))) {
+      console.log(
+        JSON.stringify({ level: "info", event: "one_time_job_done", job }),
+      );
+    }
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "one_time_job_failed",
+        job,
+        message: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+}
+
 export const dbReady = () =>
-  (setup ??= ensureCollections(db, specs).catch((err: unknown) => {
-    setup = undefined;
-    throw err;
-  }));
+  (setup ??= ensureCollections(db, specs)
+    .then(afterDeploy)
+    .catch((err: unknown) => {
+      setup = undefined;
+      throw err;
+    }));
 
 const ensureDb = createMiddleware<Env>(async (_c, next) => {
   await dbReady();

@@ -43,7 +43,7 @@ bun run dev        # http://localhost:4000/health
 
 ### Deploy (Vercel)
 
-Vercel's Hono preset serves the default export of `src/app.ts` on the Bun runtime (`vercel.json`: `bunVersion`, beta). `src/main.ts` is only for running it yourself. Collections and indexes are ensured on each instance's first request.
+Vercel's Hono preset serves the default export of `src/app.ts` on the Bun runtime (`vercel.json`: `bunVersion`, beta). `src/main.ts` is only for running it yourself. Collections and indexes are ensured on each instance's first request, which also runs any pending one-time job (`src/db/once.ts`).
 
 1. Atlas: `mongodb+srv://…` URL (no `replicaSet=rs0`); Network Access must allow Vercel (dynamic IPs: `0.0.0.0/0` unless your plan has static IPs).
 2. `vercel link`, then `vercel env add` for every variable in `.env.example` except `PORT` (`NODE_ENV` is set by Vercel). `PROXY_SECRET` is required.
@@ -203,7 +203,7 @@ Customers who book without signing up are `guest: true` records (no `email`/`pas
 for the address they typed, unique per `tenantId+phone`) that can't sign in. `appointments.customerId`
 is always a `users._id` of the same tenant. Signing up never claims a guest by phone.
 
-Existing money: `bun scripts/migrate-ledger.ts` (dry run) / `--apply` rebuilds the ledger from counter payments, paid payments (fees, refunds, disputes), delivered products and payouts; safe to run again.
+Existing money: the API fills the ledger by itself on the first request after a deploy (one-time job `ledger-backfill-2026-11`, claimed in `oneTimeJobs` so only one instance runs it; a failed or stuck run is retried later). `bun scripts/migrate-ledger.ts` (dry run) / `--apply` does the same by hand; both are safe to run again.
 
 Existing data: `bun scripts/migrate-customers.ts` (dry run) / `--apply` folds the legacy `customers`
 collection into `users` (idempotent, deletes nothing; `customers` stays as backup until you drop it).
